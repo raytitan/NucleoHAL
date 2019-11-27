@@ -2,6 +2,9 @@
 !Core
 Core/**
 !Core/Src
+!Core/Inc
 Core/Src/**
+Core/Inc/**
 !Core/Src/main.c
+!Core/Inc/main.h
 !NucleoHAL.ioc
