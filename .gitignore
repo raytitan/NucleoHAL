@@ -1,0 +1,7 @@
+**
+!Core
+Core/**
+!Core/Src
+Core/Src/**
+!Core/Src/main.c
+!NucleoHAL.ioc
