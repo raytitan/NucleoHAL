@@ -66,7 +66,7 @@ TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
-uint8_t cmd;
+uint8_t buffer[32];
 uint8_t trash[2];
 
 struct MotorState motorStates[3];
@@ -93,7 +93,7 @@ static void MX_I2C1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-uint8_t *registerAddress() {
+/*uint8_t *registerAddress() {
 	uint8_t motor = (cmd & (0b00110000))>>4;
 	uint8_t var = cmd & (0x0F);
 	switch(var) {
@@ -200,38 +200,50 @@ void updatePWM() {
 	TIM1->CCR1 = motorStates[0].output;
 	TIM1->CCR2 = motorStates[1].output;
 	TIM1->CCR3 = motorStates[2].output;
-}
+}*/
 
 void HAL_I2C_AddrCallback(I2C_HandleTypeDef * hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode){
 	if (TransferDirection == I2C_DIRECTION_TRANSMIT){
-		HAL_I2C_Slave_Receive_IT(&hi2c1, &cmd, 1);
+		HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, buffer, 1, I2C_LAST_FRAME);
 	}
 	else {
-		HAL_I2C_Slave_Transmit_IT(&hi2c1, registerAddress(), registerSize());
+		//HAL_I2C_Slave_Transmit_IT(&hi2c1, registerAddress(), registerSize());
 	}
 }
 
-void HAL_I2C_SlaveTxCpltCallback(I2C_HandleTypeDef * hi2c) {
-}
+/*void HAL_I2C_SlaveTxCpltCallback(I2C_HandleTypeDef * hi2c) {
+}*/
 
 void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef * hi2c) {
-	//HAL_GPIO_WritePin(GPIOA,GPIO_PIN_5,GPIO_PIN_SET);
-	if (cmd & 0b10000000) {
+	//HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, buffer, 1, I2C_LAST_FRAME);
+
+	//HAL_GPIO_TogglePin(GPIOA,GPIO_PIN_5);
+	/*if (cmd & 0b10000000) {
 		HAL_I2C_Slave_Receive_IT(&hi2c1, registerAddress(), registerSize());
 		cmd = 0x00;
 	}
 	else {
-	}
+	}*/
+	//HAL_I2C_EnableListen_IT(&hi2c1);
 }
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
+void HAL_I2C_ListenCpltCallback(I2C_HandleTypeDef * hi2c) {
+	HAL_I2C_EnableListen_IT(&hi2c1);
+}
+
+
+void HAL_I2C_ErrorCallback(I2C_HandleTypeDef * hi2c){
+
+}
+
+/*void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
 	//HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
 
 	if (htim == &htim8) {
 		updateQuad();
 		updatePWM();
 	}
-}
+}*/
 
 /* USER CODE END 0 */
 
@@ -351,7 +363,7 @@ static void MX_I2C1_Init(void)
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
   hi2c1.Init.Timing = 0x2000090E;
-  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.OwnAddress1 = 254;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
   hi2c1.Init.OwnAddress2 = 0;
