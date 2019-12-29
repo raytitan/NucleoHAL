@@ -45,9 +45,21 @@ struct QuadState{
 struct MotorState{
 	float accumulatedError;
 	float lastError;
-	uint32_t position;
+	float position;
 	uint16_t output;
 };
+
+struct RegisterState{
+	uint8_t enabled;
+	uint8_t mode;
+	uint16_t openSetpoint;
+	uint32_t closedSetpoint;
+	uint32_t FF;
+	uint32_t KP;
+	uint32_t KI;
+	uint32_t KD;
+};
+
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/

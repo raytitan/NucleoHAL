@@ -42,18 +42,13 @@
 #define TIMEOUT 0xFF
 
 #define MOTOR_ENABLE 0x00
-#define MOTOR_MODE 0x10
-#define MOTOR_OPEN_SETPOINT 0x20
-#define MOTOR_CLOSED_SETPOINT_H 0x40
-#define MOTOR_CLOSED_SETPOINT_L 0x50
-#define MOTOR_FF_H 0x60
-#define MOTOR_FF_L 0x70
-#define MOTOR_KP_H 0x80
-#define MOTOR_KP_L 0x90
-#define MOTOR_KI_H 0xA0
-#define MOTOR_KI_L 0xB0
-#define MOTOR_KD_H 0xC0
-#define MOTOR_KD_L 0xD0
+#define MOTOR_MODE 0x01
+#define MOTOR_OPEN_SETPOINT 0x02
+#define MOTOR_CLOSED_SETPOINT 0x03
+#define MOTOR_FF 0x04
+#define MOTOR_KP 0x05
+#define MOTOR_KI 0x06
+#define MOTOR_KD 0x07
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -72,66 +67,77 @@ TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
 uint8_t cmd;
-
-uint8_t motorEnable[3][2];
-uint8_t motorMode[3][2];
-uint8_t motorOpenSetpoint[3][2];
-uint8_t motorClosedSetpoint[3][4];
-uint8_t motorFF[3][4];
-uint8_t motorKP[3][4];
-uint8_t motorKI[3][4];
-uint8_t motorKD[3][4];
 uint8_t trash[2];
 
 struct MotorState motorStates[3];
 struct QuadState quadStates[3];
+struct RegisterState registerStates[3];
+
+const struct QuadState quadStateDefault = {0,0};
+const struct MotorState motorStateDefault = {0,0,0,0};
+const struct RegisterState registerStateDefault = {{0,0},{0,0},{0,0},{0,0,0,0},{0,0,0,0},{0,0,0,0},{0,0,0,0},{0,0,0,0}};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_I2C1_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM8_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-uint8_t *registerAddress(uint8_t var, uint8_t motor) {
+uint8_t *registerAddress() {
+	uint8_t motor = (cmd & (0b00110000))>>4;
+	uint8_t var = cmd & (0x0F);
 	switch(var) {
 	case MOTOR_ENABLE:
-		return motorEnable[motor];
+		return &registerStates[motor].enabled;
 	case MOTOR_MODE:
-		return motorMode[motor];
+		return &registerStates[motor].mode;
 	case MOTOR_OPEN_SETPOINT:
-		return motorOpenSetpoint[motor];
-	case MOTOR_CLOSED_SETPOINT_H:
-		return motorClosedSetpoint[motor];
-	case MOTOR_CLOSED_SETPOINT_L:
-		return motorClosedSetpoint[motor] + 2;
-	case MOTOR_FF_L:
-		return motorFF[motor] + 2;
-	case MOTOR_FF_H:
-		return motorFF[motor];
-	case MOTOR_KP_L:
-		return motorKP[motor] + 2;
-	case MOTOR_KP_H:
-		return motorKP[motor];
-	case MOTOR_KI_L:
-		return motorKI[motor] + 2;
-	case MOTOR_KI_H:
-		return motorKI[motor];
-	case MOTOR_KD_L:
-		return motorKD[motor] + 2;
-	case MOTOR_KD_H:
-		return motorKD[motor];
+		return &registerStates[motor].openSetpoint;
+	case MOTOR_CLOSED_SETPOINT:
+		return &registerStates[motor].closedSetpoint;
+	case MOTOR_FF:
+		return &registerStates[motor].FF;
+	case MOTOR_KP:
+		return &registerStates[motor].KP;
+	case MOTOR_KI:
+		return &registerStates[motor].KI;
+	case MOTOR_KD:
+		return &registerStates[motor].KD;
 	}
 	return trash;
+}
+
+uint16_t registerSize() {
+	uint8_t var = cmd & (0x0F);
+	switch(var) {
+	case MOTOR_ENABLE:
+		return 1;
+	case MOTOR_MODE:
+		return 1;
+	case MOTOR_OPEN_SETPOINT:
+		return 2;
+	case MOTOR_CLOSED_SETPOINT:
+		return 4;
+	case MOTOR_FF:
+		return 4;
+	case MOTOR_KP:
+		return 4;
+	case MOTOR_KI:
+		return 4;
+	case MOTOR_KD:
+		return 4;
+	}
+	return &trash;
 }
 
 void updateQuad() {
@@ -165,16 +171,15 @@ void updateQuad() {
 void updatePWM() {
 	for (uint8_t motor = 0; motor < 3; motor++){
 		uint16_t output;
-		if (motorEnable[motor][0] == ENABLE){
-			if (motorMode[motor][0] == CLOSED_LOOP){
-				float FF, KP, KI, KD;
-				uint32_t setpoint;
-				memcpy(&FF, motorFF[motor], sizeof(FF));
-				memcpy(&KP, motorKP[motor], sizeof(KP));
-				memcpy(&KI, motorKI[motor], sizeof(KI));
-				memcpy(&KD, motorKD[motor], sizeof(KD));
-				memcpy(&setpoint, motorClosedSetpoint[motor], sizeof(setpoint));
-				uint32_t currentPos = motorStates[motor].position;
+		if (registerStates[motor].enabled == ENABLE){
+			if (registerStates[motor].mode == CLOSED_LOOP){
+				float FF, KP, KI, KD, setpoint;
+				memcpy(&FF, &registerStates[motor].FF, sizeof(FF));
+				memcpy(&KP, &registerStates[motor].KP, sizeof(KP));
+				memcpy(&KI, &registerStates[motor].KI, sizeof(KI));
+				memcpy(&KD, &registerStates[motor].KD, sizeof(KD));
+				memcpy(&setpoint, &registerStates[motor].closedSetpoint, sizeof(setpoint));
+				float currentPos = motorStates[motor].position;
 				float error = (float)(setpoint - currentPos);
 				float accumulatedError = motorStates[motor].accumulatedError + ((float) error) * DT;
 				float derivativeError = (((float) error) - motorStates[motor].lastError) / DT;
@@ -183,7 +188,7 @@ void updatePWM() {
 				motorStates[motor].lastError = error;
 			}
 			else {
-				memcpy(&output, motorOpenSetpoint[motor], sizeof(output));
+				memcpy(&output, &registerStates[motor].openSetpoint, sizeof(output));
 			}
 		}
 		else {
@@ -199,28 +204,28 @@ void updatePWM() {
 
 void HAL_I2C_AddrCallback(I2C_HandleTypeDef * hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode){
 	if (TransferDirection == I2C_DIRECTION_TRANSMIT){
-		HAL_I2C_Slave_Receive(&hi2c1, &cmd, 1, TIMEOUT);
-		uint8_t motor = cmd & (0x0F);
-		uint8_t var = cmd & (0xF0);
-		HAL_I2C_Slave_Receive_IT(&hi2c1, registerAddress(var, motor), 2);
+		HAL_I2C_Slave_Receive_IT(&hi2c1, &cmd, 1);
 	}
 	else {
-		uint8_t motor = cmd & (0x0F);
-		uint8_t var = cmd & (0xF0);
-		HAL_I2C_Slave_Transmit_IT(&hi2c1, registerAddress(var, motor), 2);
+		HAL_I2C_Slave_Transmit_IT(&hi2c1, registerAddress(), registerSize());
 	}
 }
 
-void HAL_I2C_SlaveTxCpltIt(I2C_HandleTypeDef * hi2c) {
-	HAL_I2C_EnableListen_IT(&hi2c1);
+void HAL_I2C_SlaveTxCpltCallback(I2C_HandleTypeDef * hi2c) {
 }
 
-void HAL_I2C_SlaveRxCpltIt(I2C_HandleTypeDef * hi2c) {
-	HAL_I2C_EnableListen_IT(&hi2c1);
+void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef * hi2c) {
+	//HAL_GPIO_WritePin(GPIOA,GPIO_PIN_5,GPIO_PIN_SET);
+	if (cmd & 0b10000000) {
+		HAL_I2C_Slave_Receive_IT(&hi2c1, registerAddress(), registerSize());
+		cmd = 0x00;
+	}
+	else {
+	}
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
-	HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+	//HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
 
 	if (htim == &htim8) {
 		updateQuad();
@@ -258,20 +263,17 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_I2C1_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_TIM8_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
   HAL_I2C_EnableListen_IT(&hi2c1);
   HAL_TIM_Base_Start_IT(&htim8);
 
-  motorEnable[0][0] = !ENABLE;
-  motorEnable[1][0] = !ENABLE;
-  motorEnable[2][0] = !ENABLE;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -348,7 +350,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x0000020B;
+  hi2c1.Init.Timing = 0x2000090E;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
