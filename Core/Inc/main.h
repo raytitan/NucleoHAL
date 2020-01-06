@@ -37,28 +37,38 @@ extern "C" {
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-struct QuadState{
-	uint16_t now;
-	uint16_t last;
+
+struct Bus{
+	enum commands{PWM_ENABLE,MODE,OPEN_TARGET,CLOSED_TARGET,CLOSED_CONSTANTS,QUAD_ENC,SPI_ENC_ENABLE,SPI_ENC} cmd;
+	uint8_t channel;
+	enum states{COMMAND,DATA} state;
+	uint8_t buffer[16];
 };
 
-struct MotorState{
+struct Channel{
+	uint8_t pwmEnabled;
+	uint8_t mode;
+	float openSetpoint;
+	float closedSetpoint;
+	float FF;
+	float KP;
+	float KI;
+	float KD;
+
+	uint8_t spiEncEnabled;
+	float quadEnc;
+	uint32_t spiEnc;
+
+	uint16_t output;
+
+	uint16_t quadEncRawNow;
+	uint16_t quadEncRawLast;
 	float accumulatedError;
 	float lastError;
-	float position;
-	uint16_t output;
+
 };
 
-struct RegisterState{
-	uint8_t enabled;
-	uint8_t mode;
-	uint16_t openSetpoint;
-	uint32_t closedSetpoint;
-	uint32_t FF;
-	uint32_t KP;
-	uint32_t KI;
-	uint32_t KD;
-};
+
 
 /* USER CODE END ET */
 
