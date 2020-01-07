@@ -38,15 +38,20 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
 
-struct Bus{
-	enum commands{PWM_ENABLE,MODE,OPEN_TARGET,CLOSED_TARGET,CLOSED_CONSTANTS,QUAD_ENC,SPI_ENC_ENABLE,SPI_ENC} cmd;
+struct I2CBus{
+	enum I2CBusCommands{PWM_ENABLE,MODE,OPEN_TARGET,CLOSED_TARGET,CLOSED_CONSTANTS,QUAD_ENC,/*SPI_ENC_ENABLE,*/SPI_ENC} cmd;
 	uint8_t channel;
-	enum states{COMMAND,DATA} state;
+	enum I2CBusStates{COMMAND,DATA} state;
 	uint8_t buffer[16];
 };
 
+struct SPIBus {
+	enum SPIBusStates{WAIT, ZERO, ONE, TWO} state;
+	uint8_t buffer[6];
+};
+
 struct Channel{
-	uint8_t pwmEnabled;
+	uint8_t pwmIdle;
 	uint8_t mode;
 	float openSetpoint;
 	float closedSetpoint;
@@ -55,11 +60,11 @@ struct Channel{
 	float KI;
 	float KD;
 
-	uint8_t spiEncEnabled;
+	//uint8_t spiEncEnabled;
 	float quadEnc;
-	uint32_t spiEnc;
+	uint16_t spiEnc;
 
-	uint16_t output;
+	uint16_t pwmOutput;
 
 	uint16_t quadEncRawNow;
 	uint16_t quadEncRawLast;
