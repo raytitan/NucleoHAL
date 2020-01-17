@@ -46,7 +46,7 @@ struct I2CBus{
 };
 
 struct SPIBus {
-	enum SPIBusStates{WAIT, ZERO, ONE, TWO} state;
+	enum SPIBusStates{WAIT, ZERO, ONE, TWO, THREE} state;
 	uint8_t buffer[6];
 };
 

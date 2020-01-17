@@ -64,6 +64,7 @@ TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim6;
 TIM_HandleTypeDef htim7;
+TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
 struct I2CBus i2cBus;
@@ -72,7 +73,7 @@ const struct I2CBus i2cBusDefault = {ENABLE,0xFF,COMMAND,{0,0,0,0,0,0,0,0,0,0,0,
 struct SPIBus spiBus;
 const struct SPIBus spiBusDefault = {WAIT};
 
-struct Channel channels[3];
+struct Channel channels[4];
 const struct Channel channelDefault = {!IDLE, OPEN_LOOP, DISABLED_OUTPUT,0,0,0,0,0,/*!ENABLED,*/0,0,DISABLED_OUTPUT,0,0,0,0};
 
 
@@ -89,6 +90,7 @@ static void MX_I2C1_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_TIM7_Init(void);
+static void MX_TIM8_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -126,7 +128,7 @@ void i2cBusReverseBuffer(uint8_t n) {
 }
 
 void i2cBusProcessBuffer() {
-	if (i2cBus.channel > 2) {return;}
+	if (i2cBus.channel > 3) {return;}
 
 	struct Channel *channel = channels + i2cBus.channel;
 	switch(i2cBus.cmd) {
@@ -158,18 +160,21 @@ void i2cBusProcessBuffer() {
 }
 
 void spiBusSelect(){
-	HAL_GPIO_WritePin(GPIOB,GPIO_PIN_5, GPIO_PIN_SET);
-	HAL_GPIO_WritePin(GPIOB,GPIO_PIN_6, GPIO_PIN_SET);
-	HAL_GPIO_WritePin(GPIOB,GPIO_PIN_7, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOB,GPIO_PIN_12, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOB,GPIO_PIN_13, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOB,GPIO_PIN_14, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOB,GPIO_PIN_15, GPIO_PIN_SET);
 
 	switch(spiBus.state) {
 	case WAIT:break;
 	case ZERO:
-		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_5, GPIO_PIN_RESET); break;
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_12, GPIO_PIN_RESET); break;
 	case ONE:
-		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_6, GPIO_PIN_RESET); break;
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_13, GPIO_PIN_RESET); break;
 	case TWO:
-		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_7, GPIO_PIN_RESET); break;
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_14, GPIO_PIN_RESET); break;
+	case THREE:
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_15, GPIO_PIN_RESET); break;
 	}
 }
 
@@ -188,11 +193,16 @@ void spiBusContinue() {
 		spiBusSelect();
 		HAL_SPI_Receive_IT(&hspi1,spiBus.buffer + 4,1); break;
 	case TWO:
+		spiBus.state = THREE;
+		spiBusSelect();
+		HAL_SPI_Receive_IT(&hspi1,spiBus.buffer + 6,1); break;
+	case THREE:
 		spiBus.state = WAIT;
 		spiBusSelect();
 		memcpy(&channels[0].spiEnc,spiBus.buffer,2);
-		memcpy(&channels[0].spiEnc,spiBus.buffer + 2,2);
-		memcpy(&channels[0].spiEnc,spiBus.buffer + 4,2); break;
+		memcpy(&channels[1].spiEnc,spiBus.buffer + 2,2);
+		memcpy(&channels[2].spiEnc,spiBus.buffer + 4,2);
+		memcpy(&channels[3].spiEnc,spiBus.buffer + 6,2); break;
 	}
 }
 
@@ -201,8 +211,9 @@ void updateQuadEnc() {
 	channels[0].quadEncRawNow = TIM2->CNT;
 	channels[1].quadEncRawNow = TIM3->CNT;
 	channels[2].quadEncRawNow = TIM4->CNT;
+	channels[3].quadEncRawNow = TIM8->CNT;
 
-	for (int i = 0; i < 3; i++){
+	for (int i = 0; i < 4; i++){
 		struct Channel *channel = channels + i;
 		if (channel->quadEncRawNow > channel->quadEncRawLast) {
 			uint16_t diff = channel->quadEncRawNow - channel->quadEncRawLast;
@@ -231,7 +242,7 @@ void updateSpiEnc() {
 }
 
 void updatePWM() {
-	for (uint8_t i = 0; i < 3; i++){
+	for (uint8_t i = 0; i < 4; i++){
 		struct Channel *channel = channels + i;
 		float output;
 		if (channel->pwmIdle == IDLE){
@@ -261,6 +272,7 @@ void updatePWM() {
 	TIM1->CCR1 = channels[0].pwmOutput;
 	TIM1->CCR2 = channels[1].pwmOutput;
 	TIM1->CCR3 = channels[2].pwmOutput;
+	TIM1->CCR4 = channels[3].pwmOutput;
 }
 
 void HAL_I2C_AddrCallback(I2C_HandleTypeDef * hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode){
@@ -268,6 +280,7 @@ void HAL_I2C_AddrCallback(I2C_HandleTypeDef * hi2c, uint8_t TransferDirection, u
 		channels[0].pwmIdle = !IDLE;
 		channels[1].pwmIdle = !IDLE;
 		channels[2].pwmIdle = !IDLE;
+		channels[3].pwmIdle = !IDLE;
 		return;
 	}
 	if (TransferDirection == I2C_DIRECTION_TRANSMIT){
@@ -314,6 +327,8 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef * hspi) {
 }
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef * hspi){
+	HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+
 	HAL_SPI_DeInit(hspi);
 	HAL_SPI_Init(hspi);
 
@@ -353,6 +368,7 @@ int main(void)
   channels[0] = channelDefault;
   channels[1] = channelDefault;
   channels[2] = channelDefault;
+  channels[3] = channelDefault;
 
   i2cBus = i2cBusDefault;
   /* USER CODE END Init */
@@ -374,21 +390,22 @@ int main(void)
   MX_SPI1_Init();
   MX_TIM6_Init();
   MX_TIM7_Init();
+  MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
 
   HAL_I2C_EnableListen_IT(&hi2c1);
 
-  HAL_TIM_Base_Start_IT(&htim6);
-  HAL_TIM_Base_Start_IT(&htim7);
-
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
   HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
   HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
   HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
+  HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);
 
-
+  HAL_TIM_Base_Start_IT(&htim6);
+  HAL_TIM_Base_Start_IT(&htim7);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -398,7 +415,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	HAL_Delay(1000);
+//	HAL_Delay(1000);
   }
   /* USER CODE END 3 */
 }
@@ -437,9 +454,11 @@ void SystemClock_Config(void)
     Error_Handler();
   }
   PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_I2C1|RCC_PERIPHCLK_TIM1
-                              |RCC_PERIPHCLK_TIM2|RCC_PERIPHCLK_TIM34;
+                              |RCC_PERIPHCLK_TIM8|RCC_PERIPHCLK_TIM2
+                              |RCC_PERIPHCLK_TIM34;
   PeriphClkInit.I2c1ClockSelection = RCC_I2C1CLKSOURCE_HSI;
   PeriphClkInit.Tim1ClockSelection = RCC_TIM1CLK_HCLK;
+  PeriphClkInit.Tim8ClockSelection = RCC_TIM8CLK_HCLK;
   PeriphClkInit.Tim2ClockSelection = RCC_TIM2CLK_HCLK;
   PeriphClkInit.Tim34ClockSelection = RCC_TIM34CLK_HCLK;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
@@ -517,7 +536,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -597,6 +616,10 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
   }
@@ -846,6 +869,57 @@ static void MX_TIM7_Init(void)
 }
 
 /**
+  * @brief TIM8 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM8_Init(void)
+{
+
+  /* USER CODE BEGIN TIM8_Init 0 */
+
+  /* USER CODE END TIM8_Init 0 */
+
+  TIM_Encoder_InitTypeDef sConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM8_Init 1 */
+
+  /* USER CODE END TIM8_Init 1 */
+  htim8.Instance = TIM8;
+  htim8.Init.Prescaler = 0;
+  htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim8.Init.Period = 65535;
+  htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim8.Init.RepetitionCounter = 0;
+  htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI1;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC1Filter = 0;
+  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC2Filter = 0;
+  if (HAL_TIM_Encoder_Init(&htim8, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM8_Init 2 */
+
+  /* USER CODE END TIM8_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -863,7 +937,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PA5 */
   GPIO_InitStruct.Pin = GPIO_PIN_5;
@@ -872,14 +946,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB13 */
-  GPIO_InitStruct.Pin = GPIO_PIN_13;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PB5 PB6 PB7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7;
+  /*Configure GPIO pins : PB12 PB13 PB14 PB15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
