@@ -39,15 +39,16 @@ extern "C" {
 /* USER CODE BEGIN ET */
 
 struct I2CBus{
-	enum I2CBusCommands{PWM_ENABLE,MODE,OPEN_TARGET,CLOSED_TARGET,CLOSED_CONSTANTS,QUAD_ENC,/*SPI_ENC_ENABLE,*/SPI_ENC} cmd;
+	enum I2CBusCommands{PWM_ENABLE,MODE,OPEN_TARGET,CLOSED_TARGET,CLOSED_CONSTANTS,QUAD_ENC,SPI_ENC} cmd;
 	uint8_t channel;
 	enum I2CBusStates{COMMAND,DATA} state;
 	uint8_t buffer[16];
 };
 
 struct SPIBus {
-	enum SPIBusStates{WAIT, ZERO, ONE, TWO, THREE} state;
-	uint8_t buffer[6];
+	uint8_t channel;
+	uint8_t buffer[2];
+	uint16_t pin[6];
 };
 
 struct Channel{
