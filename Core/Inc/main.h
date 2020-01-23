@@ -49,6 +49,7 @@ struct SPIBus {
 	uint8_t channel;
 	uint8_t buffer[2];
 	uint16_t pin[6];
+	uint8_t busy;
 };
 
 struct Channel{

@@ -72,7 +72,7 @@ struct I2CBus i2cBus;
 const struct I2CBus i2cBusDefault = {ENABLE,0xFF,COMMAND,{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}};
 
 struct SPIBus spiBus;
-const struct SPIBus spiBusDefault = {0,{0,0},{GPIO_PIN_10, GPIO_PIN_11, GPIO_PIN_12, GPIO_PIN_13, GPIO_PIN_14, GPIO_PIN_15}};
+const struct SPIBus spiBusDefault = {5,{0,0},{GPIO_PIN_10, GPIO_PIN_11, GPIO_PIN_12, GPIO_PIN_13, GPIO_PIN_14, GPIO_PIN_15},0x00};
 
 struct Channel channels[6];
 const struct Channel channelDefault = {!IDLE, OPEN_LOOP, DISABLED_OUTPUT,0,0,0,0,0,/*!ENABLED,*/0,0,DISABLED_OUTPUT,0,0,0,0};
@@ -161,10 +161,12 @@ void i2cBusProcessBuffer() {
 }
 
 void spiBusContinue() {
+	if (spiBus.busy == 0xFF) {return;}
+	spiBus.busy = 0xFF;
 	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_SET);
 	spiBus.channel = (spiBus.channel == 5) ? 0 : spiBus.channel + 1;
 	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_RESET);
-	HAL_SPI_Receive_IT(&hspi1,spiBus.buffer,2);
+	HAL_SPI_Receive_IT(&hspi1,spiBus.buffer,1);
 }
 
 
@@ -285,6 +287,7 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef * hspi) {
 	hspi->pRxBuffPtr[1] = (data >> 8) & 0xFF;
 	spiBusContinue();*/
 	memcpy(&channels[spiBus.channel].spiEnc,spiBus.buffer,2);
+	spiBus.busy = 0x00;
 }
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef * hspi){
@@ -300,6 +303,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
 	if (htim == &htim6) {
 		updateQuadEnc();
 		updatePWM();
+		spiBusContinue();
 	}
 	if (htim == &htim7) {
 		spiBusContinue();
@@ -332,6 +336,7 @@ int main(void)
   channels[5] = channelDefault;
 
   i2cBus = i2cBusDefault;
+  spiBus = spiBusDefault;
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -367,9 +372,8 @@ int main(void)
   HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
 
   HAL_TIM_Base_Start_IT(&htim6);
-  HAL_TIM_Base_Start_IT(&htim7);
+  //HAL_TIM_Base_Start_IT(&htim7);
 
-  spiBusContinue();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -500,7 +504,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -810,7 +814,7 @@ static void MX_TIM7_Init(void)
   htim7.Instance = TIM7;
   htim7.Init.Prescaler = 7;
   htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim7.Init.Period = 10000;
+  htim7.Init.Period = 1000;
   htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
   {
