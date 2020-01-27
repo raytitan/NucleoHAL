@@ -29,6 +29,49 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+typedef struct {
+	enum {WRITE=0x80, READ=0x00} operation;
+	enum {PWM_IDLE=0x00,MODE=0x01,OPEN_SETPOINT=0x02,CLOSED_SETPOINT=0x03,FF=0x04,KP=0x05,KI=0x06,KD=0x07,QUAD_ENC=0x08,SPI_ENC=0x09,OUTPUT=0x0A} regAddress;
+	uint8_t regSize[11];
+	uint8_t channel;
+	enum {COMMAND,DATA} state;
+	uint8_t buffer[4];
+} I2CBus;
+
+typedef struct {
+	uint8_t channel;
+	uint8_t buffer[2];
+	uint16_t pin[6];
+	uint8_t busy;
+} SPIBus;
+
+
+typedef struct{
+	//REGISTERS
+	uint8_t pwmIdle;
+	uint8_t mode;
+	float openSetpoint;
+	uint32_t closedSetpoint;
+	float FF;
+	float KP;
+	float KI;
+	float KD;
+
+	uint32_t quadEnc;
+	uint16_t spiEnc;
+	uint8_t limit;
+	float output;
+
+	//INTERNAL
+	uint16_t pwmOutput;
+	uint16_t quadEncRawNow;
+	uint16_t quadEncRawLast;
+	float accumulatedError;
+	float lastError;
+
+} Channel;
+
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -40,13 +83,48 @@
 #define ENABLED 0xFF
 #define IDLE 0xFF
 
-#define OPEN_LOOP 0x00
-#define CLOSED_LOOP 0xFF
+#define OPEN 0x00
+#define CLOSED 0xFF
 
 #define DISABLED_OUTPUT 0.0
 #define MIN_OUTPUT 1000 //us
 #define MAX_OUTPUT 2000 //us
 
+const I2CBus i2cBusDefault = {
+	READ, //operation
+	PWM_IDLE, //regAddress
+	{1,1,4,4,4,4,4,4,4,2,4}, //regSize
+	0xFF, //channel
+	COMMAND, //state
+	{0,0,0,0} //buffer
+};
+
+const SPIBus spiBusDefault = {
+	0xFF,
+	{0,0},
+	{GPIO_PIN_10, GPIO_PIN_11, GPIO_PIN_12, GPIO_PIN_13, GPIO_PIN_14, GPIO_PIN_15},
+	0x00
+};
+
+const Channel channelDefault = {
+	IDLE, //pwmIdle
+	OPEN, //mode
+	DISABLED_OUTPUT, //openSetpoint
+	0, //closedSetpoint
+	0, //FF
+	0, //KP
+	0, //KI
+	0, //KD
+	0, //quadEnc
+	0, //spiEnc
+	OPEN, //limit
+	0, //output
+	DISABLED_OUTPUT, //pwmOutput
+	0, //quadEncRawNow
+	0, //quadEncRawLast
+	0, //accumulatedError
+	0 //lastError
+};
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -68,16 +146,11 @@ TIM_HandleTypeDef htim7;
 TIM_HandleTypeDef htim8;
 
 /* USER CODE BEGIN PV */
-struct I2CBus i2cBus;
-const struct I2CBus i2cBusDefault = {ENABLE,0xFF,COMMAND,{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}};
+I2CBus i2cBus;
 
-struct SPIBus spiBus;
-const struct SPIBus spiBusDefault = {5,{0,0},{GPIO_PIN_10, GPIO_PIN_11, GPIO_PIN_12, GPIO_PIN_13, GPIO_PIN_14, GPIO_PIN_15},0x00};
+SPIBus spiBus;
 
-struct Channel channels[6];
-const struct Channel channelDefault = {!IDLE, OPEN_LOOP, DISABLED_OUTPUT,0,0,0,0,0,/*!ENABLED,*/0,0,DISABLED_OUTPUT,0,0,0,0};
-
-
+Channel channels[6];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -99,16 +172,14 @@ static void MX_TIM8_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-uint8_t i2cBusBufferSize() {
+/*uint8_t i2cBusBufferSize() {
 	switch(i2cBus.cmd) {
 	case PWM_ENABLE:
 	case MODE:
-	/*case SPI_ENC_ENABLE:*/
 		return 1U;
 	case SPI_ENC:
 		return 2U;
 	case QUAD_ENC:
-	/*case SPI_ENC:*/
 	case OPEN_TARGET:
 		return 4U;
 	case CLOSED_TARGET:
@@ -118,45 +189,43 @@ uint8_t i2cBusBufferSize() {
 	}
 
 	return 0U;
-}
-
-void i2cBusReverseBuffer(uint8_t n) {
-	for (uint8_t i = 0; i < n/2; ++i){
-		uint8_t t = i2cBus.buffer[i];
-		i2cBus.buffer[i] = i2cBus.buffer[n - i - 1];
-		i2cBus.buffer[n - i - 1] = t;
-	}
-}
+}*/
 
 void i2cBusProcessBuffer() {
 	if (i2cBus.channel > 6) {return;}
 
-	struct Channel *channel = channels + i2cBus.channel;
-	switch(i2cBus.cmd) {
-	case PWM_ENABLE:
-		channel->pwmIdle = i2cBus.buffer[0]; break;
+	Channel *channel = channels + i2cBus.channel;
+	uint8_t *reg;
+
+	switch(i2cBus.regAddress) {
+	case PWM_IDLE:
+		reg = &(channel->pwmIdle); break;
 	case MODE:
-		channel->mode = i2cBus.buffer[0]; break;
-	/*case SPI_ENC_ENABLE:
-		channel->spiEncEnabled = i2cBus.buffer[0]; break;*/
+		reg = &(channel->mode); break;
+	case OPEN_SETPOINT:
+		reg = &(channel->openSetpoint); break;
+	case CLOSED_SETPOINT:
+		reg = &(channel->closedSetpoint); break;
+	case FF:
+		reg = &(channel->FF); break;
+	case KP:
+		reg = &(channel->KP); break;
+	case KI:
+		reg = &(channel->KI); break;
+	case KD:
+		reg = &(channel->KD); break;
 	case QUAD_ENC:
-		memcpy(i2cBus.buffer, &(channel->quadEnc), 4);
-		i2cBusReverseBuffer(4); break;
+		reg = &(channel->quadEnc); break;
 	case SPI_ENC:
-		memcpy(i2cBus.buffer, &(channel->spiEnc), 4); break;
-		i2cBusReverseBuffer(4); break;
-	case OPEN_TARGET:
-		i2cBusReverseBuffer(4);
-		memcpy(&(channel->openSetpoint), i2cBus.buffer, 4); break;
-	case CLOSED_TARGET:
-		i2cBusReverseBuffer(8);
-		memcpy(&(channel->closedSetpoint), i2cBus.buffer, 4);
-		memcpy(&(channel->FF), i2cBus.buffer + 4, 4); break;
-	case CLOSED_CONSTANTS:
-		i2cBusReverseBuffer(12);
-		memcpy(&(channel->KP), i2cBus.buffer, 4);
-		memcpy(&(channel->KI), i2cBus.buffer + 4, 4);
-		memcpy(&(channel->KD), i2cBus.buffer + 8, 4); break;
+		reg = &(channel->spiEnc); break;
+	case OUTPUT:
+		reg = &(channel->output); break;
+	}
+	if (i2cBus.operation == WRITE) {
+		memcpy(reg, i2cBus.buffer, i2cBus.regSize[i2cBus.regAddress]);
+	}
+	else if (i2cBus.operation == READ) {
+		memcpy(i2cBus.buffer, reg, i2cBus.regSize[i2cBus.regAddress]);
 	}
 }
 
@@ -166,7 +235,12 @@ void spiBusContinue() {
 	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_SET);
 	spiBus.channel = (spiBus.channel == 5) ? 0 : spiBus.channel + 1;
 	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_RESET);
+	/*uint16_t x = 0b0100010100000000;
+	HAL_SPI_Transmit(&hspi1,&x,1,0xFFFF);
+	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_RESET);*/
 	HAL_SPI_Receive_IT(&hspi1,spiBus.buffer,1);
+
 }
 
 
@@ -176,7 +250,7 @@ void updateQuadEnc() {
 	channels[2].quadEncRawNow = TIM4->CNT;
 
 	for (int i = 0; i < 3; i++){
-		struct Channel *channel = channels + i;
+		Channel *channel = channels + i;
 		if (channel->quadEncRawNow > channel->quadEncRawLast) {
 			uint16_t diff = channel->quadEncRawNow - channel->quadEncRawLast;
 			if (diff > 32767) { //negative overflow
@@ -199,23 +273,34 @@ void updateQuadEnc() {
 	}
 }
 
+void updateLimit() {
+	channels[0].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET) ? CLOSED : OPEN;
+	channels[1].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET) ? CLOSED : OPEN;
+	channels[2].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_7) == GPIO_PIN_RESET) ? CLOSED : OPEN;
+	channels[3].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_RESET) ? CLOSED : OPEN;
+	channels[4].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) == GPIO_PIN_RESET) ? CLOSED : OPEN;
+	channels[5].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10) == GPIO_PIN_RESET) ? CLOSED : OPEN;
+}
+
 void updatePWM() {
 	for (uint8_t i = 0; i < 6; i++){
-		struct Channel *channel = channels + i;
+		Channel *channel = channels + i;
 		float output;
-		if (channel->pwmIdle == IDLE){
-			if (channel->mode == CLOSED_LOOP){
-				float error = (float)(channel->closedSetpoint - channel->quadEnc);
-				float accumulatedError = channel->accumulatedError + ((float) error) * DT;
-				float derivativeError = (((float) error) - channel->lastError) / DT;
+		if (channel->limit != CLOSED) {
+			if (channel->pwmIdle == IDLE){
+				if (channel->mode == CLOSED){
+					float error = (float)(channel->closedSetpoint - channel->quadEnc);
+					float accumulatedError = channel->accumulatedError + ((float) error) * DT;
+					float derivativeError = (((float) error) - channel->lastError) / DT;
 
-				channel->accumulatedError = accumulatedError;
-				channel->lastError = error;
+					channel->accumulatedError = accumulatedError;
+					channel->lastError = error;
 
-				output = ((channel->KP * error) + (channel->KI * accumulatedError) + (channel->KD * derivativeError) + channel->FF);
-			}
-			else {
-				output = channel->openSetpoint;
+					output = ((channel->KP * error) + (channel->KI * accumulatedError) + (channel->KD * derivativeError) + channel->FF);
+				}
+				else {
+					output = channel->openSetpoint;
+				}
 			}
 		}
 		else {
@@ -224,6 +309,7 @@ void updatePWM() {
 		output = output < 1.0 ? output : 1.0;
 		output = output > -1.0 ? output : -1.0;
 
+		channel->output = output;
 		channel->pwmOutput = (uint16_t)(((MAX_OUTPUT - MIN_OUTPUT) * ((output + 1.0) / 2.0)) + MIN_OUTPUT);
 	}
 
@@ -237,32 +323,36 @@ void updatePWM() {
 
 void HAL_I2C_AddrCallback(I2C_HandleTypeDef * hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode){
 	if (AddrMatchCode == 0x0000) {
-		channels[0].pwmIdle = !IDLE;
-		channels[1].pwmIdle = !IDLE;
-		channels[2].pwmIdle = !IDLE;
-		channels[3].pwmIdle = !IDLE;
-		channels[4].pwmIdle = !IDLE;
-		channels[5].pwmIdle = !IDLE;
+		channels[0].pwmIdle = IDLE;
+		channels[1].pwmIdle = IDLE;
+		channels[2].pwmIdle = IDLE;
+		channels[3].pwmIdle = IDLE;
+		channels[4].pwmIdle = IDLE;
+		channels[5].pwmIdle = IDLE;
 		return;
 	}
+	i2cBus.channel = (0x000F & (AddrMatchCode >> 1));
 	if (TransferDirection == I2C_DIRECTION_TRANSMIT){
-		i2cBus.channel = (0x000F & (AddrMatchCode >> 1));
-		HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, &(i2cBus.cmd), 1, I2C_LAST_FRAME);
+		i2cBus.state = COMMAND;
+		HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, i2cBus.buffer, 1, I2C_LAST_FRAME);
 	}
 	else {
 		i2cBusProcessBuffer();
-		HAL_I2C_Slave_Seq_Transmit_IT(&hi2c1, i2cBus.buffer, i2cBusBufferSize(), I2C_LAST_FRAME);
+		HAL_I2C_Slave_Seq_Transmit_IT(&hi2c1, i2cBus.buffer, i2cBus.regSize[i2cBus.regAddress], I2C_LAST_FRAME);
 	}
 }
 
 void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef * hi2c) {
 	switch(i2cBus.state){
 	case COMMAND:
-		i2cBus.state = DATA;
-		HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, i2cBus.buffer, i2cBusBufferSize(), I2C_LAST_FRAME);
+		i2cBus.operation = 0x80 & i2cBus.buffer[0];
+		i2cBus.regAddress = 0x7F & i2cBus.buffer[0];
+		if (i2cBus.operation == WRITE){
+			HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, i2cBus.buffer, i2cBus.regSize[i2cBus.regAddress], I2C_LAST_FRAME);
+			i2cBus.state = DATA;
+		}
 		break;
 	case DATA:
-		i2cBus.state = COMMAND;
 		i2cBusProcessBuffer();
 		break;
 	}
@@ -282,10 +372,6 @@ void HAL_I2C_ErrorCallback(I2C_HandleTypeDef * hi2c){
 
 
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef * hspi) {
-	/*uint16_t data = hspi->Instance->DR;
-	hspi->pRxBuffPtr[0] = data & 0xFF;
-	hspi->pRxBuffPtr[1] = (data >> 8) & 0xFF;
-	spiBusContinue();*/
 	memcpy(&channels[spiBus.channel].spiEnc,spiBus.buffer,2);
 	spiBus.busy = 0x00;
 }
@@ -305,9 +391,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
 		updatePWM();
 		spiBusContinue();
 	}
-	if (htim == &htim7) {
+	/*if (htim == &htim7) {
 		spiBusContinue();
-	}
+	}*/
 }
 
 /* USER CODE END 0 */
@@ -499,18 +585,18 @@ static void MX_SPI1_Init(void)
   /* SPI1 parameter configuration*/
   hspi1.Instance = SPI1;
   hspi1.Init.Mode = SPI_MODE_MASTER;
-  hspi1.Init.Direction = SPI_DIRECTION_2LINES_RXONLY;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
   hspi1.Init.DataSize = SPI_DATASIZE_16BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
+  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
   hspi1.Init.CRCPolynomial = 7;
   hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
   if (HAL_SPI_Init(&hspi1) != HAL_OK)
   {
     Error_Handler();
@@ -946,7 +1032,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_7|GPIO_PIN_8 
                           |GPIO_PIN_9|GPIO_PIN_10;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PA5 */

@@ -37,46 +37,6 @@ extern "C" {
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-
-struct I2CBus{
-	enum I2CBusCommands{PWM_ENABLE,MODE,OPEN_TARGET,CLOSED_TARGET,CLOSED_CONSTANTS,QUAD_ENC,SPI_ENC} cmd;
-	uint8_t channel;
-	enum I2CBusStates{COMMAND,DATA} state;
-	uint8_t buffer[16];
-};
-
-struct SPIBus {
-	uint8_t channel;
-	uint8_t buffer[2];
-	uint16_t pin[6];
-	uint8_t busy;
-};
-
-struct Channel{
-	uint8_t pwmIdle;
-	uint8_t mode;
-	float openSetpoint;
-	float closedSetpoint;
-	float FF;
-	float KP;
-	float KI;
-	float KD;
-
-	//uint8_t spiEncEnabled;
-	float quadEnc;
-	uint16_t spiEnc;
-
-	uint16_t pwmOutput;
-
-	uint16_t quadEncRawNow;
-	uint16_t quadEncRawLast;
-	float accumulatedError;
-	float lastError;
-
-};
-
-
-
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
