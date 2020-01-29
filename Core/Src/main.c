@@ -31,8 +31,8 @@
 
 typedef struct {
 	enum {WRITE=0x80, READ=0x00} operation;
-	enum {PWM_IDLE=0x00,MODE=0x01,OPEN_SETPOINT=0x02,CLOSED_SETPOINT=0x03,FF=0x04,KP=0x05,KI=0x06,KD=0x07,QUAD_ENC=0x08,SPI_ENC=0x09,OUTPUT=0x0A} regAddress;
-	uint8_t regSize[11];
+	enum {MODE=0x00,OPEN_SETPOINT=0x01,CLOSED_SETPOINT=0x02,FF=0x03,KP=0x04,KI=0x05,KD=0x06,LIMIT=0x10,QUAD_ENC=0x11,SPI_ENC=0x12,PWM_IDLE=0x20,PWM_MIN=0x21,PWM_MAX=0x22,PWM_PERIOD=0x23,OUTPUT=0x30} regAddress;
+	uint8_t regSize[15];
 	uint8_t channel;
 	enum {COMMAND,DATA} state;
 	uint8_t buffer[4];
@@ -48,7 +48,6 @@ typedef struct {
 
 typedef struct{
 	//REGISTERS
-	uint8_t pwmIdle;
 	uint8_t mode;
 	float openSetpoint;
 	uint32_t closedSetpoint;
@@ -57,9 +56,15 @@ typedef struct{
 	float KI;
 	float KD;
 
-	uint32_t quadEnc;
-	uint16_t spiEnc;
 	uint8_t limit;
+	uint16_t spiEnc;
+	uint32_t quadEnc;
+
+	uint8_t pwmIdle;
+	uint16_t pwmMin;
+	uint16_t pwmMax;
+	uint16_t pwmPeriod;
+
 	float output;
 
 	//INTERNAL
@@ -81,19 +86,14 @@ typedef struct{
 #define DT 0.0001
 
 #define ENABLED 0xFF
-#define IDLE 0xFF
 
 #define OPEN 0x00
 #define CLOSED 0xFF
 
-#define DISABLED_OUTPUT 0.0
-#define MIN_OUTPUT 1000 //us
-#define MAX_OUTPUT 2000 //us
-
 const I2CBus i2cBusDefault = {
 	READ, //operation
 	PWM_IDLE, //regAddress
-	{1,1,4,4,4,4,4,4,4,2,4}, //regSize
+	{1,4,4,4,4,4,4,1,2,4,1,2,2,2,4}, //regSize
 	0xFF, //channel
 	COMMAND, //state
 	{0,0,0,0} //buffer
@@ -107,9 +107,9 @@ const SPIBus spiBusDefault = {
 };
 
 const Channel channelDefault = {
-	IDLE, //pwmIdle
+	OPEN, //pwmIdle
 	OPEN, //mode
-	DISABLED_OUTPUT, //openSetpoint
+	0, //openSetpoint
 	0, //closedSetpoint
 	0, //FF
 	0, //KP
@@ -119,7 +119,7 @@ const Channel channelDefault = {
 	0, //spiEnc
 	OPEN, //limit
 	0, //output
-	DISABLED_OUTPUT, //pwmOutput
+	0, //pwmOutput
 	0, //quadEncRawNow
 	0, //quadEncRawLast
 	0, //accumulatedError
@@ -198,8 +198,6 @@ void i2cBusProcessBuffer() {
 	uint8_t *reg;
 
 	switch(i2cBus.regAddress) {
-	case PWM_IDLE:
-		reg = &(channel->pwmIdle); break;
 	case MODE:
 		reg = &(channel->mode); break;
 	case OPEN_SETPOINT:
@@ -214,10 +212,20 @@ void i2cBusProcessBuffer() {
 		reg = &(channel->KI); break;
 	case KD:
 		reg = &(channel->KD); break;
-	case QUAD_ENC:
-		reg = &(channel->quadEnc); break;
+	case LIMIT:
+		reg = &(channel->spiEnc); break;
 	case SPI_ENC:
 		reg = &(channel->spiEnc); break;
+	case QUAD_ENC:
+		reg = &(channel->quadEnc); break;
+	case PWM_IDLE:
+		reg = &(channel->pwmIdle); break;
+	case PWM_MIN:
+		reg = &(channel->pwmMin); break;
+	case PWM_MAX:
+		reg = &(channel->pwmMax); break;
+	case PWM_PERIOD:
+		reg = &(channel->pwmPeriod); break;
 	case OUTPUT:
 		reg = &(channel->output); break;
 	}
@@ -229,18 +237,13 @@ void i2cBusProcessBuffer() {
 	}
 }
 
-void spiBusContinue() {
-	if (spiBus.busy == 0xFF) {return;}
-	spiBus.busy = 0xFF;
+void updateSPI() {
+	if (spiBus.busy == CLOSED) {return;}
+	spiBus.busy = CLOSED;
 	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_SET);
 	spiBus.channel = (spiBus.channel == 5) ? 0 : spiBus.channel + 1;
 	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_RESET);
-	/*uint16_t x = 0b0100010100000000;
-	HAL_SPI_Transmit(&hspi1,&x,1,0xFFFF);
-	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_SET);
-	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_RESET);*/
 	HAL_SPI_Receive_IT(&hspi1,spiBus.buffer,1);
-
 }
 
 
@@ -282,40 +285,59 @@ void updateLimit() {
 	channels[5].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10) == GPIO_PIN_RESET) ? CLOSED : OPEN;
 }
 
-void updatePWM() {
+void updateLogic() {
 	for (uint8_t i = 0; i < 6; i++){
 		Channel *channel = channels + i;
 		float output;
-		if (channel->limit != CLOSED) {
-			if (channel->pwmIdle == IDLE){
-				if (channel->mode == CLOSED){
-					float error = (float)(channel->closedSetpoint - channel->quadEnc);
-					float accumulatedError = channel->accumulatedError + ((float) error) * DT;
-					float derivativeError = (((float) error) - channel->lastError) / DT;
 
-					channel->accumulatedError = accumulatedError;
-					channel->lastError = error;
+		if (channel->mode == CLOSED){
+			float error = (float)(channel->closedSetpoint - channel->quadEnc);
+			float accumulatedError = channel->accumulatedError + ((float) error) * DT;
+			float derivativeError = (((float) error) - channel->lastError) / DT;
 
-					output = ((channel->KP * error) + (channel->KI * accumulatedError) + (channel->KD * derivativeError) + channel->FF);
-				}
-				else {
-					output = channel->openSetpoint;
-				}
-			}
+			channel->accumulatedError = accumulatedError;
+			channel->lastError = error;
+
+			output = ((channel->KP * error) + (channel->KI * accumulatedError) + (channel->KD * derivativeError) + channel->FF);
 		}
 		else {
-			output = DISABLED_OUTPUT;
+			output = channel->openSetpoint;
 		}
+
 		output = output < 1.0 ? output : 1.0;
 		output = output > -1.0 ? output : -1.0;
 
 		channel->output = output;
-		channel->pwmOutput = (uint16_t)(((MAX_OUTPUT - MIN_OUTPUT) * ((output + 1.0) / 2.0)) + MIN_OUTPUT);
+		}
+}
+
+void updatePWM() {
+	for (uint8_t i = 0; i < 6; i++) {
+		Channel *channel = channels + i;
+		if (channel->limit != CLOSED && channel->pwmIdle == CLOSED){
+			channel->pwmOutput = (uint16_t)(((channel->pwmMax - channel->pwmMin) * ((channel->output + 1.0) / 2.0)) + channel->pwmMin);
+		}
+		else {
+			channel->pwmOutput = 0;
+		}
 	}
 
+	uint16_t period;
+
+	period = 0;
+	period = (period > channels[0].pwmPeriod) ? period : channels[0].pwmPeriod;
+	period = (period > channels[1].pwmPeriod) ? period : channels[1].pwmPeriod;
+	period = (period > channels[2].pwmPeriod) ? period : channels[2].pwmPeriod;
+	TIM1->ARR = period;
 	TIM1->CCR1 = channels[0].pwmOutput;
 	TIM1->CCR2 = channels[1].pwmOutput;
 	TIM1->CCR3 = channels[2].pwmOutput;
+
+	period = 0;
+	period = (period > channels[3].pwmPeriod) ? period : channels[3].pwmPeriod;
+	period = (period > channels[4].pwmPeriod) ? period : channels[4].pwmPeriod;
+	period = (period > channels[5].pwmPeriod) ? period : channels[5].pwmPeriod;
+	TIM8->ARR = period;
 	TIM8->CCR1 = channels[3].pwmOutput;
 	TIM8->CCR2 = channels[4].pwmOutput;
 	TIM8->CCR3 = channels[5].pwmOutput;
@@ -323,12 +345,12 @@ void updatePWM() {
 
 void HAL_I2C_AddrCallback(I2C_HandleTypeDef * hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode){
 	if (AddrMatchCode == 0x0000) {
-		channels[0].pwmIdle = IDLE;
-		channels[1].pwmIdle = IDLE;
-		channels[2].pwmIdle = IDLE;
-		channels[3].pwmIdle = IDLE;
-		channels[4].pwmIdle = IDLE;
-		channels[5].pwmIdle = IDLE;
+		channels[0].pwmIdle = OPEN;
+		channels[1].pwmIdle = OPEN;
+		channels[2].pwmIdle = OPEN;
+		channels[3].pwmIdle = OPEN;
+		channels[4].pwmIdle = OPEN;
+		channels[5].pwmIdle = OPEN;
 		return;
 	}
 	i2cBus.channel = (0x000F & (AddrMatchCode >> 1));
@@ -373,27 +395,23 @@ void HAL_I2C_ErrorCallback(I2C_HandleTypeDef * hi2c){
 
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef * hspi) {
 	memcpy(&channels[spiBus.channel].spiEnc,spiBus.buffer,2);
-	spiBus.busy = 0x00;
+	spiBus.busy = OPEN;
 }
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef * hspi){
 	HAL_SPI_DeInit(hspi);
 	HAL_SPI_Init(hspi);
-
-	//spiBusContinue();
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
-	//HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
 
 	if (htim == &htim6) {
 		updateQuadEnc();
+		updateLimit();
+		updateLogic();
 		updatePWM();
-		spiBusContinue();
+		updateSPI();
 	}
-	/*if (htim == &htim7) {
-		spiBusContinue();
-	}*/
 }
 
 /* USER CODE END 0 */
@@ -469,7 +487,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	//HAL_Delay(1000);
   }
   /* USER CODE END 3 */
 }
@@ -1021,9 +1038,6 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_13 
                           |GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
 
@@ -1033,13 +1047,6 @@ static void MX_GPIO_Init(void)
                           |GPIO_PIN_9|GPIO_PIN_10;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PA5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_5;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB10 PB11 PB12 PB13 
