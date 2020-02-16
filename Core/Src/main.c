@@ -37,20 +37,20 @@ typedef struct {
 	uint8_t buffer[4];
 	uint16_t tick;
 } I2CBus;
-
+/*
 typedef struct {
 	uint8_t channel;
 	uint8_t buffer[2];
 	uint16_t pin[6];
 	uint8_t busy;
 	uint16_t tick;
-} SPIBus;
+} SPIBus;*/
 
 
 typedef struct{
 	//REGISTERS
 	uint8_t mode;
-	float openSetpoint;
+	int16_t openSetpoint;
 	uint32_t closedSetpoint;
 	float FF;
 	float KP;
@@ -99,13 +99,13 @@ const I2CBus i2cBusDefault = {
 	0
 };
 
-const SPIBus spiBusDefault = {
+/*const SPIBus spiBusDefault = {
 	0xFF,
 	{0,0},
 	{GPIO_PIN_10, GPIO_PIN_11, GPIO_PIN_12, GPIO_PIN_13, GPIO_PIN_14, GPIO_PIN_15},
 	0x00,
 	0
-};
+};*/
 
 const Channel channelDefault = {
 	OPEN, //mode
@@ -150,7 +150,7 @@ TIM_HandleTypeDef htim8;
 /* USER CODE BEGIN PV */
 I2CBus i2cBus;
 
-SPIBus spiBus;
+//SPIBus spiBus;
 
 Channel channels[6];
 /* USER CODE END PV */
@@ -173,29 +173,36 @@ static void MX_TIM8_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/*uint8_t i2cBusBufferSize() {
-	switch(i2cBus.cmd) {
-	case PWM_ENABLE:
-	case MODE:
-		return 1U;
-	case SPI_ENC:
-		return 2U;
-	case QUAD_ENC:
-	case OPEN_TARGET:
-		return 4U;
-	case CLOSED_TARGET:
-		return 8U;
-	case CLOSED_CONSTANTS:
-		return 12U;
+uint16_t spiPin(uint8_t channel) {
+	switch(channel) {
+	case 0:
+		return GPIO_PIN_10;
+	case 1:
+		return GPIO_PIN_11;
+	case 2:
+		return GPIO_PIN_12;
+	case 3:
+		return GPIO_PIN_13;
+	case 4:
+		return GPIO_PIN_14;
+	case 5:
+		return GPIO_PIN_15;
 	}
+	return GPIO_PIN_9;
+}
 
-	return 0U;
-}*/
+uint16_t spiUpdate(uint8_t channel) {
+	uint16_t value = 0;
+	HAL_GPIO_WritePin(GPIOB, spiPin(channel), GPIO_PIN_RESET);
+	HAL_SPI_Receive(&hspi1,&value,1,72000);
+	HAL_GPIO_WritePin(GPIOB, spiPin(channel), GPIO_PIN_SET);
+	return value;
+}
 
 uint8_t i2cBusRegSize() {
 	switch(i2cBus.regAddress) {
 	case MODE: return 1;
-	case OPEN_SETPOINT: return 4;
+	case OPEN_SETPOINT: return 2;
 	case CLOSED_SETPOINT: return 4;
 	case FF: return 4;
 	case KP: return 4;
@@ -236,6 +243,7 @@ void i2cBusProcessBuffer() {
 	case LIMIT:
 		reg = &(channel->spiEnc); break;
 	case SPI_ENC:
+		channel->spiEnc = spiUpdate(i2cBus.channel);
 		reg = &(channel->spiEnc); break;
 	case QUAD_ENC:
 		reg = &(channel->quadEnc); break;
@@ -264,17 +272,6 @@ void i2cReset() {
 
 	i2cBus.state = COMMAND;
 	HAL_I2C_EnableListen_IT(&hi2c1);
-}
-
-void updateSPI() {
-	if (spiBus.busy == CLOSED) {return;}
-	/*spiBus.tick += 1;
-	if (spiBus.tick >= 100) {spiBus.tick = 0; return;}*/
-	spiBus.busy = CLOSED;
-	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_SET);
-	spiBus.channel = (spiBus.channel == 5) ? 0 : spiBus.channel + 1;
-	HAL_GPIO_WritePin(GPIOB, spiBus.pin[spiBus.channel], GPIO_PIN_RESET);
-	HAL_SPI_Receive_IT(&hspi1,spiBus.buffer,1);
 }
 
 void updateI2C() {
@@ -339,13 +336,13 @@ void updateLogic() {
 			channel->lastError = error;
 
 			output = ((channel->KP * error) + (channel->KI * accumulatedError) + (channel->KD * derivativeError) + channel->FF);
+			output = output < 1.0 ? output : 1.0;
+			output = output > -1.0 ? output : -1.0;
 		}
 		else {
-			output = channel->openSetpoint;
+			output = ((float)channel->openSetpoint)/ 32768.0;
 		}
 
-		output = output < 1.0 ? output : 1.0;
-		output = output > -1.0 ? output : -1.0;
 
 		channel->output = output;
 	}
@@ -426,15 +423,15 @@ void HAL_I2C_ErrorCallback(I2C_HandleTypeDef * hi2c){
 }
 
 
-void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef * hspi) {
+/*void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef * hspi) {
 	memcpy(&channels[spiBus.channel].spiEnc,spiBus.buffer,2);
 	spiBus.busy = OPEN;
-}
+}*/
 
-void HAL_SPI_ErrorCallback(SPI_HandleTypeDef * hspi){
+/*void HAL_SPI_ErrorCallback(SPI_HandleTypeDef * hspi){
 	HAL_SPI_DeInit(hspi);
 	HAL_SPI_Init(hspi);
-}
+}*/
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
 	if (htim == &htim6) {
@@ -444,7 +441,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
 		updateLogic();
 		updatePWM();
 		updateI2C();
-		updateSPI();
 		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
 	}
 }
@@ -475,7 +471,6 @@ int main(void)
   channels[5] = channelDefault;
 
   i2cBus = i2cBusDefault;
-  spiBus = spiBusDefault;
   /* USER CODE END Init */
 
   /* Configure the system clock */
