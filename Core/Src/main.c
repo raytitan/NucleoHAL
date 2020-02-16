@@ -108,7 +108,6 @@ const SPIBus spiBusDefault = {
 };
 
 const Channel channelDefault = {
-	OPEN, //pwmIdle
 	OPEN, //mode
 	0, //openSetpoint
 	0, //closedSetpoint
@@ -116,9 +115,12 @@ const Channel channelDefault = {
 	0, //KP
 	0, //KI
 	0, //KD
-	0, //quadEnc
 	0, //spiEnc
-	OPEN, //limit
+	0, //quadEnc
+	OPEN, //pwmIdle
+	0, //pwmMin
+	0, //pwmMax
+	0, //pwmPeriod
 	0, //output
 	0, //pwmOutput
 	0, //quadEncRawNow
@@ -382,15 +384,6 @@ void updatePWM() {
 }
 
 void HAL_I2C_AddrCallback(I2C_HandleTypeDef * hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode){
-	/*if (AddrMatchCode == 0x0000) {
-		channels[0].pwmIdle = OPEN;
-		channels[1].pwmIdle = OPEN;
-		channels[2].pwmIdle = OPEN;
-		channels[3].pwmIdle = OPEN;
-		channels[4].pwmIdle = OPEN;
-		channels[5].pwmIdle = OPEN;
-		return;
-	}*/
 	if (TransferDirection == I2C_DIRECTION_TRANSMIT){
 		HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, i2cBus.buffer, 1, I2C_LAST_FRAME);
 		i2cBus.state = COMMAND;
@@ -445,13 +438,14 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef * hspi){
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
 	if (htim == &htim6) {
-		//HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
 		updateQuadEnc();
 		updateLimit();
 		updateLogic();
 		updatePWM();
-		updateSPI();
 		updateI2C();
+		updateSPI();
+		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
 	}
 }
 
@@ -594,11 +588,11 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x0000020B;
-  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.Timing = 0x00000001;
+  hi2c1.Init.OwnAddress1 = 144;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_ENABLE;
-  hi2c1.Init.OwnAddress2 = 36;
+  hi2c1.Init.OwnAddress2 = 32;
   hi2c1.Init.OwnAddress2Masks = I2C_OA2_MASK04;
   hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
@@ -618,6 +612,9 @@ static void MX_I2C1_Init(void)
   {
     Error_Handler();
   }
+  /** I2C Fast mode Plus enable 
+  */
+  __HAL_SYSCFG_FASTMODEPLUS_ENABLE(I2C_FASTMODEPLUS_I2C1);
   /* USER CODE BEGIN I2C1_Init 2 */
 
   /* USER CODE END I2C1_Init 2 */
