@@ -232,9 +232,9 @@ void i2cProcessReceive() {
 	case OFF: channel->pwmIdle = 0x00; return;
 	case ON: channel->pwmIdle = 0xFF; return;
 	case OPEN:
-	case OPEN_PLUS: memcpy(&(channel->openSetpoint), i2cBus.buffer, 2); return;
+	case OPEN_PLUS: channel->mode = 0x00; memcpy(&(channel->openSetpoint), i2cBus.buffer, 2); return;
 	case CLOSED:
-	case CLOSED_PLUS: memcpy(&(channel->FF), i2cBus.buffer, 4); memcpy(&(channel->closedSetpoint),i2cBus.buffer+4,4); return;
+	case CLOSED_PLUS: channel->mode = 0xFF; memcpy(&(channel->FF), i2cBus.buffer, 4); memcpy(&(channel->closedSetpoint),i2cBus.buffer+4,4); return;
 	case CONFIG_PWM: memcpy(&(channel->pwmMin),i2cBus.buffer,2); memcpy(&(channel->pwmMax),i2cBus.buffer+2,2); memcpy(&(channel->pwmPeriod),i2cBus.buffer+4,2); return;
 	case CONFIG_K: memcpy(&(channel->KP),i2cBus.buffer,4); memcpy(&(channel->KI),i2cBus.buffer+4,4); memcpy(&(channel->KD),i2cBus.buffer+8,4); return;
 	case QUAD:
