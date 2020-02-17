@@ -59,6 +59,9 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define RED 16
+#define ORANGE 32
+#define YELLOW 48
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
