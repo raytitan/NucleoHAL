@@ -289,26 +289,13 @@ void updateQuadEnc() {
 
 	for (int i = 0; i < 3; i++){
 		Channel *channel = channels + i;
-		/*if (channel->quadEncRawNow > channel->quadEncRawLast) {
-			uint16_t diff = channel->quadEncRawNow - channel->quadEncRawLast;
-			if (diff > 32767) { //negative overflow
-				channel->quadEnc -= (65535 - diff);
-			}
-			else { //positive
-				channel->quadEnc += diff;
-			}
+		int32_t diff = ((int32_t)channel->quadEncRawNow) - ((int32_t)channel->quadEncRawLast);
+		if (diff < -32768 || diff > 32768) {
+			channel->quadEnc -= diff;
 		}
 		else {
-			uint16_t diff = channel->quadEncRawLast - channel->quadEncRawNow;
-			if (diff > 32767) { //positive overflow
-				channel->quadEnc += (65535 - diff);
-			}
-			else { //negative
-				channel->quadEnc -= diff;
-			}
-		}*/
-
-		channel->quadEnc += (channel->quadEncRawNow - channel->quadEncRawLast);
+			channel->quadEnc += diff;
+		}
 		channel->quadEncRawLast = channel->quadEncRawNow;
 	}
 }
