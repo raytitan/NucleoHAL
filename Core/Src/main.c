@@ -30,28 +30,17 @@
 /* USER CODE BEGIN PTD */
 
 typedef struct {
-	enum {WRITE=0x80, READ=0x00} operation;
-	enum {MODE=0x00,OPEN_SETPOINT=0x01,CLOSED_SETPOINT=0x02,FF=0x03,KP=0x04,KI=0x05,KD=0x06,LIMIT=0x10,QUAD_ENC=0x11,SPI_ENC=0x12,PWM_IDLE=0x20,PWM_MIN=0x21,PWM_MAX=0x22,PWM_PERIOD=0x23,OUTPUT=0x30} regAddress;
+	enum {OFF=0x00, ON=0x0F, OPEN=0x10, OPEN_PLUS=0x1F, CLOSED=0x20, CLOSED_PLUS=0x2F, CONFIG_PWM=0x30, CONFIG_K=0x3F, QUAD=0x40, ADJUST=0x4F, SPI=0x50, LIMIT=0x60, UNKNOWN=0xFF} operation;
 	uint8_t channel;
-	enum {COMMAND,DATA} state;
-	uint8_t buffer[4];
+	uint8_t buffer[32];
 	uint16_t tick;
 } I2CBus;
-/*
-typedef struct {
-	uint8_t channel;
-	uint8_t buffer[2];
-	uint16_t pin[6];
-	uint8_t busy;
-	uint16_t tick;
-} SPIBus;*/
-
 
 typedef struct{
 	//REGISTERS
 	uint8_t mode;
-	int16_t openSetpoint;
-	uint32_t closedSetpoint;
+	uint16_t openSetpoint;
+	int32_t closedSetpoint;
 	float FF;
 	float KP;
 	float KI;
@@ -59,20 +48,18 @@ typedef struct{
 
 	uint8_t limit;
 	uint16_t spiEnc;
-	uint32_t quadEnc;
+	int32_t quadEnc;
 
 	uint8_t pwmIdle;
 	uint16_t pwmMin;
 	uint16_t pwmMax;
 	uint16_t pwmPeriod;
 
-	float output;
-
 	//INTERNAL
 	uint16_t pwmOutput;
 	uint16_t quadEncRawNow;
 	uint16_t quadEncRawLast;
-	float accumulatedError;
+	float integratedError;
 	float lastError;
 
 } Channel;
@@ -85,30 +72,20 @@ typedef struct{
 
 #define DT 0.0001
 
-#define ENABLED 0xFF
+//#define ENABLED 0xFF
 
-#define OPEN 0x00
-#define CLOSED 0xFF
+//#define OPEN 0x00
+//#define CLOSED 0xFF
 
 const I2CBus i2cBusDefault = {
-	READ, //operation
-	PWM_IDLE, //regAddress
+	UNKNOWN, //operation
 	0xFF, //channel
-	COMMAND, //state
-	{0,0,0,0}, //buffer
+	{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, //buffer
 	0
 };
 
-/*const SPIBus spiBusDefault = {
-	0xFF,
-	{0,0},
-	{GPIO_PIN_10, GPIO_PIN_11, GPIO_PIN_12, GPIO_PIN_13, GPIO_PIN_14, GPIO_PIN_15},
-	0x00,
-	0
-};*/
-
 const Channel channelDefault = {
-	OPEN, //mode
+	0x00, //mode
 	0, //openSetpoint
 	0, //closedSetpoint
 	0, //FF
@@ -117,15 +94,14 @@ const Channel channelDefault = {
 	0, //KD
 	0, //spiEnc
 	0, //quadEnc
-	OPEN, //pwmIdle
+	0x00, //pwmIdle
 	0, //pwmMin
 	0, //pwmMax
 	0, //pwmPeriod
-	0, //output
 	0, //pwmOutput
 	0, //quadEncRawNow
 	0, //quadEncRawLast
-	0, //accumulatedError
+	0, //integratedError
 	0 //lastError
 };
 /* USER CODE END PD */
@@ -175,102 +151,104 @@ static void MX_TIM8_Init(void);
 
 uint16_t spiPin(uint8_t channel) {
 	switch(channel) {
-	case 0:
-		return GPIO_PIN_10;
-	case 1:
-		return GPIO_PIN_11;
-	case 2:
-		return GPIO_PIN_12;
-	case 3:
-		return GPIO_PIN_13;
-	case 4:
-		return GPIO_PIN_14;
-	case 5:
-		return GPIO_PIN_15;
+	case 0: return GPIO_PIN_10;
+	case 1: return GPIO_PIN_11;
+	case 2: return GPIO_PIN_12;
+	case 3: return GPIO_PIN_13;
+	case 4: return GPIO_PIN_14;
+	case 5: return GPIO_PIN_15;
 	}
-	return GPIO_PIN_9;
+	return 0;
 }
 
-uint16_t spiUpdate(uint8_t channel) {
-	uint16_t value = 0;
+void spiUpdate(uint8_t channel) {
 	HAL_GPIO_WritePin(GPIOB, spiPin(channel), GPIO_PIN_RESET);
-	HAL_SPI_Receive(&hspi1,&value,1,72000);
+	HAL_SPI_Receive(&hspi1,&((channels+channel)->spiEnc),1,72000);
 	HAL_GPIO_WritePin(GPIOB, spiPin(channel), GPIO_PIN_SET);
-	return value;
 }
 
-uint8_t i2cBusRegSize() {
-	switch(i2cBus.regAddress) {
-	case MODE: return 1;
-	case OPEN_SETPOINT: return 2;
-	case CLOSED_SETPOINT: return 4;
-	case FF: return 4;
-	case KP: return 4;
-	case KI: return 4;
-	case KD: return 4;
-	case LIMIT: return 1;
-	case QUAD_ENC: return 4;
-	case SPI_ENC: return 2;
-	case PWM_IDLE: return 1;
-	case PWM_MIN: return 2;
-	case PWM_MAX: return 2;
-	case PWM_PERIOD: return 2;
-	case OUTPUT: return 4;
-	}
-}
-
-void i2cBusProcessBuffer() {
-	if (i2cBus.channel > 6) {return;}
-
-	Channel *channel = channels + i2cBus.channel;
-	uint8_t *reg;
-
-	switch(i2cBus.regAddress) {
-	case MODE:
-		reg = &(channel->mode); break;
-	case OPEN_SETPOINT:
-		reg = &(channel->openSetpoint); break;
-	case CLOSED_SETPOINT:
-		reg = &(channel->closedSetpoint); break;
-	case FF:
-		reg = &(channel->FF); break;
-	case KP:
-		reg = &(channel->KP); break;
-	case KI:
-		reg = &(channel->KI); break;
-	case KD:
-		reg = &(channel->KD); break;
+uint8_t i2cNumReceive() {
+	switch(i2cBus.operation) {
+	case OFF:
+	case ON: return 0;
+	case OPEN:
+	case OPEN_PLUS: return 2;
+	case CLOSED:
+	case CLOSED_PLUS: return 8;
+	case CONFIG_PWM: return 6;
+	case CONFIG_K: return 12;
+	case QUAD:
+	case SPI: return 0;
+	case ADJUST: return 4;
 	case LIMIT:
-		reg = &(channel->spiEnc); break;
-	case SPI_ENC:
-		channel->spiEnc = spiUpdate(i2cBus.channel);
-		reg = &(channel->spiEnc); break;
-	case QUAD_ENC:
-		reg = &(channel->quadEnc); break;
-	case PWM_IDLE:
-		reg = &(channel->pwmIdle); break;
-	case PWM_MIN:
-		reg = &(channel->pwmMin); break;
-	case PWM_MAX:
-		reg = &(channel->pwmMax); break;
-	case PWM_PERIOD:
-		reg = &(channel->pwmPeriod); break;
-	case OUTPUT:
-		reg = &(channel->output); break;
+	case UNKNOWN: return 0;
 	}
-	if (i2cBus.operation == WRITE) {
-		memcpy(reg, i2cBus.buffer, i2cBusRegSize());
+	return 0;
+}
+
+uint8_t i2cNumSend() {
+	switch(i2cBus.operation) {
+	case OFF:
+	case ON:
+	case OPEN: return 0;
+	case OPEN_PLUS: return 4;
+	case CLOSED:return 0;
+	case CLOSED_PLUS: return 4;
+	case CONFIG_PWM:
+	case CONFIG_K: return 0;
+	case QUAD: return 4;
+	case SPI: return 2;
+	case ADJUST: return 0;
+	case LIMIT: return 1;
+	case UNKNOWN: return 0;
 	}
-	else if (i2cBus.operation == READ) {
-		memcpy(i2cBus.buffer, reg, i2cBusRegSize());
+	return 0;
+}
+
+void i2cPrepareSend() {
+	if (i2cBus.channel > 6) {return;}
+	Channel *channel = channels + i2cBus.channel;
+	switch(i2cBus.operation) {
+	case OFF:
+	case ON:
+	case OPEN: return;
+	case OPEN_PLUS: memcpy(i2cBus.buffer, &(channel->quadEnc), 4); return;
+	case CLOSED: return;
+	case CLOSED_PLUS: memcpy(i2cBus.buffer, &(channel->quadEnc), 4); return;
+	case CONFIG_PWM:
+	case CONFIG_K: return;
+	case QUAD: memcpy(i2cBus.buffer, &(channel->quadEnc), 4); return;
+	case SPI: spiUpdate(i2cBus.channel); memcpy(i2cBus.buffer, &(channel->spiEnc), 2); return;
+	case ADJUST: return;
+	case LIMIT: memcpy(i2cBus.buffer, &(channel->limit), 1); return;
+	case UNKNOWN: return;
+	}
+}
+
+void i2cProcessReceive() {
+	if (i2cBus.channel > 6) {return;}
+	Channel *channel = channels + i2cBus.channel;
+	switch(i2cBus.operation) {
+	case OFF: channel->pwmIdle = 0x00; return;
+	case ON: channel->pwmIdle = 0xFF; return;
+	case OPEN:
+	case OPEN_PLUS: memcpy(&(channel->openSetpoint), i2cBus.buffer, 2); return;
+	case CLOSED:
+	case CLOSED_PLUS: memcpy(&(channel->FF), i2cBus.buffer, 4); memcpy(&(channel->closedSetpoint),i2cBus.buffer+4,4); return;
+	case CONFIG_PWM: memcpy(&(channel->pwmMin),i2cBus.buffer,2); memcpy(&(channel->pwmMax),i2cBus.buffer+2,2); memcpy(&(channel->pwmPeriod),i2cBus.buffer+4,2); return;
+	case CONFIG_K: memcpy(&(channel->KP),i2cBus.buffer,4); memcpy(&(channel->KI),i2cBus.buffer+4,4); memcpy(&(channel->KD),i2cBus.buffer+8,4); return;
+	case QUAD:
+	case SPI: return;
+	case ADJUST: memcpy(&(channel->quadEnc), i2cBus.buffer, 4);
+	case LIMIT:
+	case UNKNOWN: return;
 	}
 }
 
 void i2cReset() {
 	HAL_I2C_DeInit(&hi2c1);
+	i2cBus.operation = UNKNOWN;
 	HAL_I2C_Init(&hi2c1);
-
-	i2cBus.state = COMMAND;
 	HAL_I2C_EnableListen_IT(&hi2c1);
 }
 
@@ -289,37 +267,24 @@ void updateQuadEnc() {
 
 	for (int i = 0; i < 3; i++){
 		Channel *channel = channels + i;
-		/*if (channel->quadEncRawNow > channel->quadEncRawLast) {
-			uint16_t diff = channel->quadEncRawNow - channel->quadEncRawLast;
-			if (diff > 32767) { //negative overflow
-				channel->quadEnc -= (65535 - diff);
-			}
-			else { //positive
-				channel->quadEnc += diff;
-			}
+		int32_t diff = ((int32_t)channel->quadEncRawNow) - ((int32_t)channel->quadEncRawLast);
+		if (diff < -32768 || diff > 32768) {
+			channel->quadEnc -= diff;
 		}
 		else {
-			uint16_t diff = channel->quadEncRawLast - channel->quadEncRawNow;
-			if (diff > 32767) { //positive overflow
-				channel->quadEnc += (65535 - diff);
-			}
-			else { //negative
-				channel->quadEnc -= diff;
-			}
-		}*/
-
-		channel->quadEnc += (channel->quadEncRawNow - channel->quadEncRawLast);
+			channel->quadEnc += diff;
+		}
 		channel->quadEncRawLast = channel->quadEncRawNow;
 	}
 }
 
 void updateLimit() {
-	channels[0].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET) ? CLOSED : OPEN;
-	channels[1].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET) ? CLOSED : OPEN;
-	channels[2].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_7) == GPIO_PIN_RESET) ? CLOSED : OPEN;
-	channels[3].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_RESET) ? CLOSED : OPEN;
-	channels[4].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) == GPIO_PIN_RESET) ? CLOSED : OPEN;
-	channels[5].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10) == GPIO_PIN_RESET) ? CLOSED : OPEN;
+	channels[0].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET) ? 0xFF : 0x00;
+	channels[1].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET) ? 0xFF : 0x00;
+	channels[2].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_7) == GPIO_PIN_RESET) ? 0xFF : 0x00;
+	channels[3].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_RESET) ? 0xFF : 0x00;
+	channels[4].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) == GPIO_PIN_RESET) ? 0xFF : 0x00;
+	channels[5].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10) == GPIO_PIN_RESET) ? 0xFF : 0x00;
 }
 
 void updateLogic() {
@@ -327,34 +292,32 @@ void updateLogic() {
 		Channel *channel = channels + i;
 		float output;
 
-		if (channel->mode == CLOSED){
+		if (channel->mode == 0xFF){
 			float error = (float)(channel->closedSetpoint - channel->quadEnc);
-			float accumulatedError = channel->accumulatedError + ((float) error) * DT;
-			float derivativeError = (((float) error) - channel->lastError) / DT;
+			float integratedError = channel->integratedError + (error * DT);
+			float derivativeError = (error - channel->lastError) / DT;
 
-			channel->accumulatedError = accumulatedError;
+			channel->integratedError = integratedError;
 			channel->lastError = error;
 
-			output = ((channel->KP * error) + (channel->KI * accumulatedError) + (channel->KD * derivativeError) + channel->FF);
+			output = ((channel->KP * error) + (channel->KI * integratedError) + (channel->KD * derivativeError) + channel->FF);
 			output = output < 1.0 ? output : 1.0;
 			output = output > -1.0 ? output : -1.0;
+			channel->pwmOutput = (uint16_t)(((channel->pwmMax - channel->pwmMin) * ((output + 1.0) / 2.0)) + channel->pwmMin);
 		}
 		else {
-			output = ((float)channel->openSetpoint)/ 32768.0;
+			channel->pwmOutput = channel->openSetpoint;
+			channel->pwmOutput = channel->pwmOutput > channel->pwmMax ? channel->pwmMax : channel->pwmOutput;
+			channel->pwmOutput = channel->pwmOutput < channel->pwmMin ? channel->pwmMin : channel->pwmOutput;
 		}
 
-
-		channel->output = output;
 	}
 }
 
 void updatePWM() {
 	for (uint8_t i = 0; i < 6; i++) {
 		Channel *channel = channels + i;
-		if (channel->limit != CLOSED && channel->pwmIdle == CLOSED){
-			channel->pwmOutput = (uint16_t)(((channel->pwmMax - channel->pwmMin) * ((channel->output + 1.0) / 2.0)) + channel->pwmMin);
-		}
-		else {
+		if (channel->limit == 0xFF || channel->pwmIdle != 0xFF){
 			channel->pwmOutput = 0;
 		}
 	}
@@ -381,39 +344,33 @@ void updatePWM() {
 }
 
 void HAL_I2C_AddrCallback(I2C_HandleTypeDef * hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode){
+	i2cBus.channel = (0x000F & (AddrMatchCode >> 1));
 	if (TransferDirection == I2C_DIRECTION_TRANSMIT){
 		HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, i2cBus.buffer, 1, I2C_LAST_FRAME);
-		i2cBus.state = COMMAND;
+		i2cBus.operation = UNKNOWN;
 	}
 	else {
-		HAL_I2C_Slave_Seq_Transmit_IT(&hi2c1, i2cBus.buffer, i2cBusRegSize(), I2C_LAST_FRAME);
+		i2cPrepareSend();
+		if (i2cNumSend() != 0) {
+			HAL_I2C_Slave_Seq_Transmit_IT(&hi2c1, i2cBus.buffer, i2cNumSend(), I2C_LAST_FRAME);
+		}
 	}
 	i2cBus.tick = 0;
-	i2cBus.channel = (0x000F & (AddrMatchCode >> 1));
 }
 
 void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef * hi2c) {
-	switch(i2cBus.state){
-	case COMMAND:
-		i2cBus.operation = 0x80 & i2cBus.buffer[0];
-		i2cBus.regAddress = 0x7F & i2cBus.buffer[0];
-		if (i2cBus.operation == WRITE){
-			HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, i2cBus.buffer, i2cBusRegSize(), I2C_LAST_FRAME);
-			i2cBus.state = DATA;
+	if (i2cBus.operation == UNKNOWN) {
+		i2cBus.operation = i2cBus.buffer[0];
+		if (i2cNumReceive() != 0) {
+			HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, i2cBus.buffer, i2cNumReceive(), I2C_LAST_FRAME);
 		}
-		else {
-			i2cBusProcessBuffer();
-		}
-		break;
-	case DATA:
-		i2cBusProcessBuffer();
-		break;
+	}
+	else {
+		i2cProcessReceive();
 	}
 }
 
-/*void HAL_I2C_SlaveTxCpltCallback(I2C_HandleTypeDef * hi2c) {
 
-}*/
 void HAL_I2C_ListenCpltCallback(I2C_HandleTypeDef * hi2c) {
 	HAL_I2C_EnableListen_IT(&hi2c1);
 }
@@ -421,17 +378,6 @@ void HAL_I2C_ListenCpltCallback(I2C_HandleTypeDef * hi2c) {
 void HAL_I2C_ErrorCallback(I2C_HandleTypeDef * hi2c){
 	i2cReset();
 }
-
-
-/*void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef * hspi) {
-	memcpy(&channels[spiBus.channel].spiEnc,spiBus.buffer,2);
-	spiBus.busy = OPEN;
-}*/
-
-/*void HAL_SPI_ErrorCallback(SPI_HandleTypeDef * hspi){
-	HAL_SPI_DeInit(hspi);
-	HAL_SPI_Init(hspi);
-}*/
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
 	if (htim == &htim6) {
