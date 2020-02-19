@@ -290,8 +290,11 @@ void updateQuadEnc() {
 	for (int i = 0; i < 3; i++){
 		Channel *channel = channels + i;
 		int32_t diff = ((int32_t)channel->quadEncRawNow) - ((int32_t)channel->quadEncRawLast);
-		if (diff < -32768 || diff > 32768) {
-			channel->quadEnc -= diff;
+		if (diff < -32768){
+			channel->quadEnc += (65535 + diff);
+		}
+		else if (diff > 32768){
+			channel->quadEnc -= (65535 - diff);
 		}
 		else {
 			channel->quadEnc += diff;
@@ -575,7 +578,7 @@ static void MX_I2C1_Init(void)
   hi2c1.Init.OwnAddress1 = 32;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_ENABLE;
-  hi2c1.Init.OwnAddress2 = 64;
+  hi2c1.Init.OwnAddress2 = 32;
   hi2c1.Init.OwnAddress2Masks = I2C_OA2_MASK04;
   hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
