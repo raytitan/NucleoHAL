@@ -70,7 +70,7 @@ typedef struct{
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define DT 0.0001
+#define DT 0.001
 
 //#define ENABLED 0xFF
 
@@ -177,9 +177,9 @@ uint8_t i2cNumReceive() {
 	case CLOSED_PLUS: return 8;
 	case CONFIG_PWM: return 6;
 	case CONFIG_K: return 12;
-	case QUAD:
-	case SPI: return 0;
+	case QUAD: return 0;
 	case ADJUST: return 4;
+	case SPI:
 	case LIMIT:
 	case UNKNOWN: return 0;
 	}
@@ -197,8 +197,8 @@ uint8_t i2cNumSend() {
 	case CONFIG_PWM:
 	case CONFIG_K: return 0;
 	case QUAD: return 4;
-	case SPI: return 2;
 	case ADJUST: return 0;
+	case SPI: return 2;
 	case LIMIT: return 1;
 	case UNKNOWN: return 0;
 	}
@@ -218,8 +218,8 @@ void i2cPrepareSend() {
 	case CONFIG_PWM:
 	case CONFIG_K: return;
 	case QUAD: memcpy(i2cBus.buffer, &(channel->quadEnc), 4); return;
-	case SPI: spiUpdate(i2cBus.channel); memcpy(i2cBus.buffer, &(channel->spiEnc), 2); return;
 	case ADJUST: return;
+	case SPI: spiUpdate(i2cBus.channel); memcpy(i2cBus.buffer, &(channel->spiEnc), 2); return;
 	case LIMIT: memcpy(i2cBus.buffer, &(channel->limit), 1); return;
 	case UNKNOWN: return;
 	}
@@ -237,9 +237,9 @@ void i2cProcessReceive() {
 	case CLOSED_PLUS: channel->mode = 0xFF; memcpy(&(channel->FF), i2cBus.buffer, 4); memcpy(&(channel->closedSetpoint),i2cBus.buffer+4,4); return;
 	case CONFIG_PWM: memcpy(&(channel->pwmMin),i2cBus.buffer,2); memcpy(&(channel->pwmMax),i2cBus.buffer+2,2); memcpy(&(channel->pwmPeriod),i2cBus.buffer+4,2); return;
 	case CONFIG_K: memcpy(&(channel->KP),i2cBus.buffer,4); memcpy(&(channel->KI),i2cBus.buffer+4,4); memcpy(&(channel->KD),i2cBus.buffer+8,4); return;
-	case QUAD:
-	case SPI: return;
+	case QUAD: return;
 	case ADJUST: memcpy(&(channel->quadEnc), i2cBus.buffer, 4);
+	case SPI:
 	case LIMIT:
 	case UNKNOWN: return;
 	}
@@ -268,11 +268,11 @@ void updateQuadEnc() {
 	for (int i = 0; i < 3; i++){
 		Channel *channel = channels + i;
 		int32_t diff = ((int32_t)channel->quadEncRawNow) - ((int32_t)channel->quadEncRawLast);
-		if (diff < -32768 || diff > 32768) {
-			channel->quadEnc -= diff;
+		if (diff < -32768 ) {
+			channel->quadEnc += (65535 + diff);
 		}
-		else {
-			channel->quadEnc += diff;
+		else if (diff > 32768){
+			channel->quadEnc -= (65535 - diff);
 		}
 		channel->quadEncRawLast = channel->quadEncRawNow;
 	}
