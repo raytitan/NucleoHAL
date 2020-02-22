@@ -62,6 +62,9 @@ void Error_Handler(void);
 #define RED 16
 #define ORANGE 32
 #define YELLOW 48
+#define GREEN 16
+#define BLUE 32
+#define PURPLE 48
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
