@@ -30,7 +30,7 @@
 /* USER CODE BEGIN PTD */
 
 typedef struct {
-	enum {OFF=0x00, ON=0x0F, OPEN=0x10, OPEN_PLUS=0x1F, CLOSED=0x20, CLOSED_PLUS=0x2F, CONFIG_PWM=0x30, CONFIG_K=0x3F, QUAD=0x40, ADJUST=0x4F, SPI=0x50, LIMIT=0x60, UNKNOWN=0xFF} operation;
+	enum {OPEN=0x10, OPEN_PLUS=0x1F, CLOSED=0x20, CLOSED_PLUS=0x2F, CONFIG_PWM=0x30, CONFIG_K=0x3F, QUAD=0x40, ADJUST=0x4F, SPI=0x50, /*LIMIT=0x60,*/ UNKNOWN=0xFF} operation;
 	uint8_t channel;
 	uint8_t buffer[32];
 	uint16_t tick;
@@ -38,7 +38,8 @@ typedef struct {
 
 typedef struct{
 	//REGISTERS
-	uint8_t mode;
+	uint8_t controlMode;
+	int8_t dir;
 	uint16_t openSetpoint;
 	int32_t closedSetpoint;
 	float FF;
@@ -46,11 +47,12 @@ typedef struct{
 	float KI;
 	float KD;
 
-	uint8_t limit;
+	//uint8_t limit;
 	uint16_t spiEnc;
 	int32_t quadEnc;
 
-	uint8_t pwmIdle;
+	uint8_t pwmEnable;
+	enum uint8_t {SIGN_MAGNITUDE=0x00, LOCK_ANTIPHASE=0x0F}pwmMode;
 	uint16_t pwmMin;
 	uint16_t pwmMax;
 	uint16_t pwmPeriod;
@@ -71,7 +73,7 @@ typedef struct{
 /* USER CODE BEGIN PD */
 
 #define DT 0.001
-
+#define THRESHOLD 0.1
 //#define ENABLED 0xFF
 
 //#define OPEN 0x00
@@ -85,7 +87,8 @@ const I2CBus i2cBusDefault = {
 };
 
 const Channel channelDefault = {
-	0x00, //mode
+	0x00, //controlMode
+	0, //dir
 	0, //openSetpoint
 	0, //closedSetpoint
 	0, //FF
@@ -94,7 +97,8 @@ const Channel channelDefault = {
 	0, //KD
 	0, //spiEnc
 	0, //quadEnc
-	0x00, //pwmIdle
+	0x00, //pwmEnable
+	0x00, //pwmMode
 	0, //pwmMin
 	0, //pwmMax
 	0, //pwmPeriod
@@ -149,47 +153,46 @@ static void MX_TIM8_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+//Returns SPI CS pin based on channel number
 uint16_t spiPin(uint8_t channel) {
 	switch(channel) {
-	case 0: return GPIO_PIN_10;
-	case 1: return GPIO_PIN_11;
-	case 2: return GPIO_PIN_12;
-	case 3: return GPIO_PIN_13;
-	case 4: return GPIO_PIN_14;
-	case 5: return GPIO_PIN_15;
+	case 0: return GPIO_PIN_0;
+	case 1: return GPIO_PIN_1;
+	case 2: return GPIO_PIN_2;
 	}
 	return 0;
 }
 
+//Updates spiEnc register of a channel
 void spiUpdate(uint8_t channel) {
-	HAL_GPIO_WritePin(GPIOB, spiPin(channel), GPIO_PIN_RESET);
-	HAL_SPI_Receive(&hspi1,&((channels+channel)->spiEnc),1,72000);
-	HAL_GPIO_WritePin(GPIOB, spiPin(channel), GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOB, spiPin(channel), GPIO_PIN_RESET); //Pull down appropriate SPI CS
+	HAL_SPI_Init(&hspi1); //Enable SPI CLK
+	HAL_SPI_Receive(&hspi1,&((channels+channel)->spiEnc),1,72000); //1 16-bit receive
+	HAL_SPI_DeInit(&hspi1); //Disable SPI CLK
+	HAL_GPIO_WritePin(GPIOB, spiPin(channel), GPIO_PIN_SET); //Release appropriate SPI CS
 }
 
+//Returns number of i2c bytes to receive based on i2cBus.operation
 uint8_t i2cNumReceive() {
 	switch(i2cBus.operation) {
-	case OFF:
-	case ON: return 0;
 	case OPEN:
-	case OPEN_PLUS: return 2;
+	case OPEN_PLUS: return 3;
 	case CLOSED:
 	case CLOSED_PLUS: return 8;
-	case CONFIG_PWM: return 6;
+	case CONFIG_PWM: return 7;
 	case CONFIG_K: return 12;
 	case QUAD: return 0;
 	case ADJUST: return 4;
 	case SPI:
-	case LIMIT:
+	//case LIMIT:
 	case UNKNOWN: return 0;
 	}
 	return 0;
 }
 
+//Returns number of i2c bytes to send based on i2cBus.operation
 uint8_t i2cNumSend() {
 	switch(i2cBus.operation) {
-	case OFF:
-	case ON:
 	case OPEN: return 0;
 	case OPEN_PLUS: return 4;
 	case CLOSED:return 0;
@@ -199,18 +202,17 @@ uint8_t i2cNumSend() {
 	case QUAD: return 4;
 	case ADJUST: return 0;
 	case SPI: return 2;
-	case LIMIT: return 1;
+	//case LIMIT: return 1;
 	case UNKNOWN: return 0;
 	}
 	return 0;
 }
 
+//Prepares i2c data to send in i2cBus.buffer, using i2cBus.operation and i2cBus.channel
 void i2cPrepareSend() {
 	if (i2cBus.channel > 6) {return;}
 	Channel *channel = channels + i2cBus.channel;
 	switch(i2cBus.operation) {
-	case OFF:
-	case ON:
 	case OPEN: return;
 	case OPEN_PLUS: memcpy(i2cBus.buffer, &(channel->quadEnc), 4); return;
 	case CLOSED: return;
@@ -220,38 +222,45 @@ void i2cPrepareSend() {
 	case QUAD: memcpy(i2cBus.buffer, &(channel->quadEnc), 4); return;
 	case ADJUST: return;
 	case SPI: spiUpdate(i2cBus.channel); memcpy(i2cBus.buffer, &(channel->spiEnc), 2); return;
-	case LIMIT: memcpy(i2cBus.buffer, &(channel->limit), 1); return;
+	//case LIMIT: memcpy(i2cBus.buffer, &(channel->limit), 1); return;
 	case UNKNOWN: return;
 	}
 }
 
+//Processes i2c data received in i2cBus.buffer, using i2cBus.operation and i2cBus.channel
 void i2cProcessReceive() {
 	if (i2cBus.channel > 6) {return;}
 	Channel *channel = channels + i2cBus.channel;
 	switch(i2cBus.operation) {
-	case OFF: channel->pwmIdle = 0x00; return;
-	case ON: channel->pwmIdle = 0xFF; return;
 	case OPEN:
-	case OPEN_PLUS: channel->mode = 0x00; memcpy(&(channel->openSetpoint), i2cBus.buffer, 2); return;
+	case OPEN_PLUS: channel->pwmEnable = 0xFF; channel->controlMode = 0x00; memcpy(&(channel->dir), i2cBus.buffer, 1); memcpy(&(channel->openSetpoint), i2cBus.buffer+1, 2); return;
 	case CLOSED:
-	case CLOSED_PLUS: channel->mode = 0xFF; memcpy(&(channel->FF), i2cBus.buffer, 4); memcpy(&(channel->closedSetpoint),i2cBus.buffer+4,4); return;
-	case CONFIG_PWM: memcpy(&(channel->pwmMin),i2cBus.buffer,2); memcpy(&(channel->pwmMax),i2cBus.buffer+2,2); memcpy(&(channel->pwmPeriod),i2cBus.buffer+4,2); return;
+	case CLOSED_PLUS:  channel->pwmEnable = 0xFF; channel->controlMode = 0xFF; memcpy(&(channel->FF), i2cBus.buffer, 4); memcpy(&(channel->closedSetpoint),i2cBus.buffer+4,4); return;
+	case CONFIG_PWM: memcpy(&(channel->pwmMode),i2cBus.buffer,1); memcpy(&(channel->pwmMin),i2cBus.buffer+1,2); memcpy(&(channel->pwmMax),i2cBus.buffer+3,2); memcpy(&(channel->pwmPeriod),i2cBus.buffer+5,2); return;
 	case CONFIG_K: memcpy(&(channel->KP),i2cBus.buffer,4); memcpy(&(channel->KI),i2cBus.buffer+4,4); memcpy(&(channel->KD),i2cBus.buffer+8,4); return;
 	case QUAD: return;
 	case ADJUST: memcpy(&(channel->quadEnc), i2cBus.buffer, 4);
 	case SPI:
-	case LIMIT:
+	//case LIMIT:
 	case UNKNOWN: return;
 	}
 }
 
+//Restarts the i2c hardware. Disables pwm signals
 void i2cReset() {
 	HAL_I2C_DeInit(&hi2c1);
 	i2cBus.operation = UNKNOWN;
+	channels[0].pwmEnable = 0x00;
+	channels[1].pwmEnable = 0x00;
+	channels[2].pwmEnable = 0x00;
+	channels[3].pwmEnable = 0x00;
+	channels[4].pwmEnable = 0x00;
+	channels[5].pwmEnable = 0x00;
 	HAL_I2C_Init(&hi2c1);
 	HAL_I2C_EnableListen_IT(&hi2c1);
 }
 
+//Calls i2cReset() when i2cBus.tick goes over 1000
 void updateI2C() {
 	i2cBus.tick += 1;
 	if (i2cBus.tick >= 1000) {
@@ -260,6 +269,7 @@ void updateI2C() {
 	}
 }
 
+//Updates channel.quadEnc for channels 0, 1, 2
 void updateQuadEnc() {
 	channels[0].quadEncRawNow = TIM2->CNT;
 	channels[1].quadEncRawNow = TIM3->CNT;
@@ -268,34 +278,36 @@ void updateQuadEnc() {
 	for (int i = 0; i < 3; i++){
 		Channel *channel = channels + i;
 		int32_t diff = ((int32_t)channel->quadEncRawNow) - ((int32_t)channel->quadEncRawLast);
-		if (diff < -32768 ) {
+		if (diff < -32768) { //UNDERFLOW
 			channel->quadEnc += (65535 + diff);
 		}
-		else if (diff > 32768){
+		else if (diff > 32768){ //OVERFLOW
 			channel->quadEnc -= (65535 - diff);
 		}
-		else {
+		else { //NORMAL
 			channel->quadEnc += diff;
 		}
 		channel->quadEncRawLast = channel->quadEncRawNow;
 	}
 }
 
-void updateLimit() {
+//Updates channel.limit for all channels
+/*void updateLimit() {
 	channels[0].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET) ? 0xFF : 0x00;
 	channels[1].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET) ? 0xFF : 0x00;
 	channels[2].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_7) == GPIO_PIN_RESET) ? 0xFF : 0x00;
 	channels[3].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_RESET) ? 0xFF : 0x00;
 	channels[4].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) == GPIO_PIN_RESET) ? 0xFF : 0x00;
 	channels[5].limit = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10) == GPIO_PIN_RESET) ? 0xFF : 0x00;
-}
+}*/
 
+//Updates channel.pwmOutput for all channels
 void updateLogic() {
 	for (uint8_t i = 0; i < 6; i++){
 		Channel *channel = channels + i;
 		float output;
 
-		if (channel->mode == 0xFF){
+		if (channel->controlMode == 0xFF){ //CLOSED LOOP
 			float error = (float)(channel->closedSetpoint - channel->quadEnc);
 			float integratedError = channel->integratedError + (error * DT);
 			float derivativeError = (error - channel->lastError) / DT;
@@ -306,21 +318,43 @@ void updateLogic() {
 			output = ((channel->KP * error) + (channel->KI * integratedError) + (channel->KD * derivativeError) + channel->FF);
 			output = output < 1.0 ? output : 1.0;
 			output = output > -1.0 ? output : -1.0;
-			channel->pwmOutput = (uint16_t)(((channel->pwmMax - channel->pwmMin) * ((output + 1.0) / 2.0)) + channel->pwmMin);
+
+			if (channel->pwmMode == SIGN_MAGNITUDE){ //SIGN MAGNITUDE
+				if (output > THRESHOLD) {
+					channel->pwmOutput = (uint16_t)(((channel->pwmMax - channel->pwmMin) * (output)) + channel->pwmMin);
+					channel->dir = 0x00;
+				}
+				else if (output < -THRESHOLD){
+					channel->pwmOutput = (uint16_t)(((channel->pwmMax - channel->pwmMin) * (-1.0 * output)) + channel->pwmMin);
+					channel->dir = 0xFF;
+				}
+				else { //OUTPUT NOT ABOVE THRESHOLD
+					channel->pwmOutput = 0;
+				}
+			}
+			else if (channel->pwmMode == LOCK_ANTIPHASE) { //LOCK ANTIPHASE
+				if (output > THRESHOLD  || output < -THRESHOLD) {
+					channel->pwmOutput = (uint16_t)(((channel->pwmMax - channel->pwmMin) * ((output + 1.0) / 2.0)) + channel->pwmMin);
+				}
+				else { //OUTPUT NOT ABOVE THRESHOLD
+					channel->pwmOutput = (uint16_t)(((channel->pwmMax - channel->pwmMin) * 0.5) + channel->pwmMin);
+				}
+			}
 		}
-		else {
+		else { //OPEN LOOP
 			channel->pwmOutput = channel->openSetpoint;
-			channel->pwmOutput = channel->pwmOutput > channel->pwmMax ? channel->pwmMax : channel->pwmOutput;
-			channel->pwmOutput = channel->pwmOutput < channel->pwmMin ? channel->pwmMin : channel->pwmOutput;
 		}
+
 
 	}
 }
 
+//Updates the pwm interface CCR and ARR based on pwmPeriod and pwmOutput for all channels
+//Updates the GPIO dir pin base on dir for all channels
 void updatePWM() {
 	for (uint8_t i = 0; i < 6; i++) {
 		Channel *channel = channels + i;
-		if (channel->limit == 0xFF || channel->pwmIdle != 0xFF){
+		if (/*channel->limit == 0xFF ||*/ channel->pwmEnable != 0xFF){
 			channel->pwmOutput = 0;
 		}
 	}
@@ -332,64 +366,82 @@ void updatePWM() {
 	period = (period > channels[1].pwmPeriod) ? period : channels[1].pwmPeriod;
 	period = (period > channels[2].pwmPeriod) ? period : channels[2].pwmPeriod;
 	TIM1->ARR = period;
-	TIM1->CCR1 = channels[0].pwmOutput;
-	TIM1->CCR2 = channels[1].pwmOutput;
-	TIM1->CCR3 = channels[2].pwmOutput;
-
 	period = 0;
 	period = (period > channels[3].pwmPeriod) ? period : channels[3].pwmPeriod;
 	period = (period > channels[4].pwmPeriod) ? period : channels[4].pwmPeriod;
 	period = (period > channels[5].pwmPeriod) ? period : channels[5].pwmPeriod;
 	TIM8->ARR = period;
+
+	TIM1->CCR1 = channels[0].pwmOutput;
+	TIM1->CCR2 = channels[1].pwmOutput;
+	TIM1->CCR3 = channels[2].pwmOutput;
 	TIM8->CCR1 = channels[3].pwmOutput;
 	TIM8->CCR2 = channels[4].pwmOutput;
 	TIM8->CCR3 = channels[5].pwmOutput;
+
+	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, channels[0].dir);
+	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_11, channels[1].dir);
+	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, channels[2].dir);
+	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, channels[3].dir);
+	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, channels[4].dir);
+	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, channels[5].dir);
+
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, !channels[0].dir);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, !channels[1].dir);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, !channels[2].dir);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, !channels[3].dir);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, !channels[4].dir);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, !channels[5].dir);
 }
 
+//Callback when i2c address of any channel is noticed
 void HAL_I2C_AddrCallback(I2C_HandleTypeDef * hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode){
 	i2cBus.channel = (0x000F & (AddrMatchCode >> 1));
 	if (TransferDirection == I2C_DIRECTION_TRANSMIT){
-		HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, i2cBus.buffer, 1, I2C_LAST_FRAME);
+		HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, i2cBus.buffer, 1, I2C_LAST_FRAME); //Receive command byte
 		i2cBus.operation = UNKNOWN;
 	}
-	else {
+	else { //Send data based on command byte
 		i2cPrepareSend();
 		if (i2cNumSend() != 0) {
 			HAL_I2C_Slave_Seq_Transmit_IT(&hi2c1, i2cBus.buffer, i2cNumSend(), I2C_LAST_FRAME);
 		}
 	}
-	i2cBus.tick = 0;
+	i2cBus.tick = 0; //Reset i2cBus.tick
 }
 
+//Callback when i2c receive is complete
 void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef * hi2c) {
-	if (i2cBus.operation == UNKNOWN) {
+	if (i2cBus.operation == UNKNOWN) {//Expected a command byte
 		i2cBus.operation = i2cBus.buffer[0];
-		if (i2cNumReceive() != 0) {
+		if (i2cNumReceive() != 0) {//Receive data bytes
 			HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, i2cBus.buffer, i2cNumReceive(), I2C_LAST_FRAME);
 		}
-		else {
+		else {//Don't receive data bytes
 			i2cProcessReceive();
 		}
 	}
-	else {
+	else {//Expected data bytes
 		i2cProcessReceive();
 	}
 }
 
-
+//Callback when i2c transaction is complete
 void HAL_I2C_ListenCpltCallback(I2C_HandleTypeDef * hi2c) {
 	HAL_I2C_EnableListen_IT(&hi2c1);
 }
 
+//Callback when i2c interface detects an error
 void HAL_I2C_ErrorCallback(I2C_HandleTypeDef * hi2c){
 	i2cReset();
 }
 
+//Timer to trigger other functions
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim){
 	if (htim == &htim6) {
 		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
 		updateQuadEnc();
-		updateLimit();
+		//updateLimit();
 		updateLogic();
 		updatePWM();
 		updateI2C();
@@ -444,6 +496,8 @@ int main(void)
   MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
 
+  HAL_SPI_DeInit(&hspi1);
+
   HAL_I2C_EnableListen_IT(&hi2c1);
 
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
@@ -457,7 +511,6 @@ int main(void)
   HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
 
   HAL_TIM_Base_Start_IT(&htim6);
-  //HAL_TIM_Base_Start_IT(&htim7);
 
   /* USER CODE END 2 */
 
@@ -465,7 +518,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  //HAL_Delay(10000);
+	  //HAL_Delay(1000);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -540,7 +593,7 @@ static void MX_I2C1_Init(void)
   hi2c1.Init.OwnAddress1 = 32;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_ENABLE;
-  hi2c1.Init.OwnAddress2 = 96;
+  hi2c1.Init.OwnAddress2 = 32;
   hi2c1.Init.OwnAddress2Masks = I2C_OA2_MASK04;
   hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
@@ -587,7 +640,7 @@ static void MX_SPI1_Init(void)
   /* SPI1 parameter configuration*/
   hspi1.Instance = SPI1;
   hspi1.Init.Mode = SPI_MODE_MASTER;
-  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES_RXONLY;
   hspi1.Init.DataSize = SPI_DATASIZE_16BIT;
   hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
   hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
@@ -725,11 +778,11 @@ static void MX_TIM2_Init(void)
   sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 0;
+  sConfig.IC1Filter = 10;
   sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 0;
+  sConfig.IC2Filter = 10;
   if (HAL_TIM_Encoder_Init(&htim2, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -774,11 +827,11 @@ static void MX_TIM3_Init(void)
   sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 0;
+  sConfig.IC1Filter = 10;
   sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 0;
+  sConfig.IC2Filter = 10;
   if (HAL_TIM_Encoder_Init(&htim3, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -985,31 +1038,39 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15|GPIO_PIN_10 
+                          |GPIO_PIN_11|GPIO_PIN_12, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_13 
-                          |GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PA2 PA3 PA7 PA8 
-                           PA9 PA10 */
-  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_7|GPIO_PIN_8 
-                          |GPIO_PIN_9|GPIO_PIN_10;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_10 
+                          |GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14 
+                          |GPIO_PIN_15, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : PA5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  /*Configure GPIO pins : PC13 PC14 PC15 PC10 
+                           PC11 PC12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15|GPIO_PIN_10 
+                          |GPIO_PIN_11|GPIO_PIN_12;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PA5 PA14 PA15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_14|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB10 PB11 PB12 PB13 
-                           PB14 PB15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_13 
-                          |GPIO_PIN_14|GPIO_PIN_15;
+  /*Configure GPIO pins : PB0 PB1 PB2 PB10 
+                           PB11 PB12 PB13 PB14 
+                           PB15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_10 
+                          |GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14 
+                          |GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
