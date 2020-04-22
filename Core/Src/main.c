@@ -213,17 +213,31 @@ void i2cPrepareSend() {
 	if (i2cBus.channel > 6) {return;}
 	Channel *channel = channels + i2cBus.channel;
 	switch(i2cBus.operation) {
-	case OPEN: return;
-	case OPEN_PLUS: memcpy(i2cBus.buffer, &(channel->quadEnc), 4); return;
-	case CLOSED: return;
-	case CLOSED_PLUS: memcpy(i2cBus.buffer, &(channel->quadEnc), 4); return;
+	case OPEN:
+		return;
+	case OPEN_PLUS:
+		memcpy(i2cBus.buffer, &(channel->quadEnc), 4)
+		return;
+	case CLOSED:
+		return;
+	case CLOSED_PLUS:
+		memcpy(i2cBus.buffer, &(channel->quadEnc), 4);
+		return;
 	case CONFIG_PWM:
-	case CONFIG_K: return;
-	case QUAD: memcpy(i2cBus.buffer, &(channel->quadEnc), 4); return;
-	case ADJUST: return;
-	case SPI: spiUpdate(i2cBus.channel); memcpy(i2cBus.buffer, &(channel->spiEnc), 2); return;
+	case CONFIG_K:
+		return;
+	case QUAD:
+		memcpy(i2cBus.buffer, &(channel->quadEnc), 4);
+		return;
+	case ADJUST:
+		return;
+	case SPI:
+		spiUpdate(i2cBus.channel);
+		memcpy(i2cBus.buffer, &(channel->spiEnc), 2);
+		return;
 	//case LIMIT: memcpy(i2cBus.buffer, &(channel->limit), 1); return;
-	case UNKNOWN: return;
+	case UNKNOWN:
+		return;
 	}
 }
 
@@ -233,16 +247,38 @@ void i2cProcessReceive() {
 	Channel *channel = channels + i2cBus.channel;
 	switch(i2cBus.operation) {
 	case OPEN:
-	case OPEN_PLUS: channel->pwmEnable = 0xFF; channel->controlMode = 0x00; memcpy(&(channel->dir), i2cBus.buffer, 1); memcpy(&(channel->openSetpoint), i2cBus.buffer+1, 2); return;
+	case OPEN_PLUS:
+		channel->pwmEnable = 0xFF;
+		channel->controlMode = 0x00;
+		memcpy(&(channel->dir), i2cBus.buffer, 1);
+		memcpy(&(channel->openSetpoint), i2cBus.buffer+1, 2);
+		return;
 	case CLOSED:
-	case CLOSED_PLUS:  channel->pwmEnable = 0xFF; channel->controlMode = 0xFF; memcpy(&(channel->FF), i2cBus.buffer, 4); memcpy(&(channel->closedSetpoint),i2cBus.buffer+4,4); return;
-	case CONFIG_PWM: memcpy(&(channel->pwmMode),i2cBus.buffer,1); memcpy(&(channel->pwmMin),i2cBus.buffer+1,2); memcpy(&(channel->pwmMax),i2cBus.buffer+3,2); memcpy(&(channel->pwmPeriod),i2cBus.buffer+5,2); return;
-	case CONFIG_K: memcpy(&(channel->KP),i2cBus.buffer,4); memcpy(&(channel->KI),i2cBus.buffer+4,4); memcpy(&(channel->KD),i2cBus.buffer+8,4); return;
-	case QUAD: return;
-	case ADJUST: memcpy(&(channel->quadEnc), i2cBus.buffer, 4);
+	case CLOSED_PLUS:
+		channel->pwmEnable = 0xFF;
+		channel->controlMode = 0xFF;
+		memcpy(&(channel->FF), i2cBus.buffer, 4);
+		memcpy(&(channel->closedSetpoint),i2cBus.buffer+4,4);
+		return;
+	case CONFIG_PWM:
+		memcpy(&(channel->pwmMode),i2cBus.buffer,1);
+		memcpy(&(channel->pwmMin),i2cBus.buffer+1,2);
+		memcpy(&(channel->pwmMax),i2cBus.buffer+3,2);
+		memcpy(&(channel->pwmPeriod),i2cBus.buffer+5,2);
+		return;
+	case CONFIG_K:
+		memcpy(&(channel->KP),i2cBus.buffer,4);
+		memcpy(&(channel->KI),i2cBus.buffer+4,4);
+		memcpy(&(channel->KD),i2cBus.buffer+8,4);
+		return;
+	case QUAD:
+		return;
+	case ADJUST:
+		memcpy(&(channel->quadEnc), i2cBus.buffer, 4);
 	case SPI:
 	//case LIMIT:
-	case UNKNOWN: return;
+	case UNKNOWN:
+		return;
 	}
 }
 
@@ -278,10 +314,10 @@ void updateQuadEnc() {
 	for (int i = 0; i < 3; i++){
 		Channel *channel = channels + i;
 		int32_t diff = ((int32_t)channel->quadEncRawNow) - ((int32_t)channel->quadEncRawLast);
-		if (diff < -32768) { //UNDERFLOW
+		if (diff < -32768) { //OVERFLOW
 			channel->quadEnc += (65535 + diff);
 		}
-		else if (diff > 32768){ //OVERFLOW
+		else if (diff > 32768){ //UNDERFLOW
 			channel->quadEnc -= (65535 - diff);
 		}
 		else { //NORMAL
